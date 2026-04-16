@@ -121,24 +121,32 @@ def run(base_configuration, benchmark, ignore_error=False, perforation_script: s
         benchmark_options.append('enable_heartbeats')
         benchmark_options.append('hb_results_dir=%s' % BENCHMARKS)
 
-    # NOTE: This determines the logging interval! (see issue in forked repo)
     periodicPower = 1000000
-    #periodicPower = 250000
+    # DVFS experiments
     if 'mediumDVFS' in base_configuration:
         periodicPower = 250000
     if 'fastDVFS' in base_configuration:
         periodicPower = 100000
 
-    if not perforation_script:
-        perforation_script = 'magic_perforation_rate:' 
+    # Migration experiments: fast migration needs finer logging
+    if 'fastMig' in base_configuration:
+        periodicPower = 100000
+    if 'exfastMig' in base_configuration:
+        periodicPower = 10000
+
+    script_args = ''.join([' -s' + s for s in SCRIPTS])
+
+    perforation_args = ''
+    if perforation_script:
+        perforation_args = ' -s' + perforation_script
    
     args = '-n {number_cores} -c {config} --benchmarks={benchmark} --no-roi --sim-end=last -senergystats:{periodic} -speriodic-power:{periodic}{script}{perforation}{benchmark_options}' \
         .format(number_cores=NUMBER_CORES,
                 config=SNIPER_CONFIG,
                 benchmark=benchmark,
                 periodic=periodicPower,
-                script= ''.join([' -s' + s for s in SCRIPTS]),
-                perforation=' -s'+perforation_script,
+                script=script_args,
+                perforation=perforation_args,
                 benchmark_options=''.join([' -B ' + opt for opt in benchmark_options]))
     
     console_output = ''
@@ -260,6 +268,28 @@ def get_workload(benchmark, cores, parallelism=None, number_tasks=None, input_se
         raise Exception('either parallelism or number_tasks needs to be set')
 
 
+def experiment_thread_migration():
+    benchmarks = [
+        'parsec-blackscholes',
+        'parsec-streamcluster',
+    ]
+
+#    configs = [
+#        ('baseline_no_migration', ['pinned']),
+#        ('too_little_migration', ['roaming', 'slowMig']),
+#        ('moderate_migration', ['roaming']),
+#        ('too_much_migration', ['roaming', 'fastMig']),
+#    ]
+    configs = [
+        ('ex_too_much_migration', ['roaming', 'exfastMig']),
+    ]
+    for benchmark in benchmarks:
+        b = get_instance(benchmark, 4, input_set='simsmall')
+
+        for config_name, base_configuration in configs:
+            print('Running {} with {}'.format(benchmark, config_name))
+            run(base_configuration, b)
+
 def example():
     for benchmark in (
                       'parsec-blackscholes',
@@ -373,7 +403,8 @@ def test_static_power():
 
 
 def main():
-    example()
+    # example()
+    experiment_thread_migration()
     # test_static_power()
     # multi_program()
 

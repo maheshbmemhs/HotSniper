@@ -19,7 +19,10 @@ struct migration {
 class MigrationPolicy {
 public:
     virtual ~MigrationPolicy() {}
-    virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores) = 0;
+    virtual std::vector<migration> migrate(
+        SubsecondTime time, 
+        const std::vector<int> &taskIds, 
+        const std::vector<bool> &activeCores) = 0;
 };
 
 #endif

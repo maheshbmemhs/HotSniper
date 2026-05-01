@@ -262,13 +262,13 @@ def get_workload(benchmark, cores, parallelism=None, number_tasks=None, input_se
 
 def example():
     for benchmark in (
-                      'parsec-blackscholes',
+                    #   'parsec-blackscholes',
                       #'parsec-bodytrack',
                       #'parsec-canneal',
                       #'parsec-dedup',
                       #'parsec-ferret'
                       #'parsec-fluidanimate',
-                      #'parsec-streamcluster',
+                      'parsec-streamcluster',
                       #'parsec-swaptions',
                       #'parsec-x264',
                       #'splash2-barnes',
@@ -288,7 +288,7 @@ def example():
 
         min_parallelism = get_feasible_parallelisms(benchmark)[0]
         max_parallelism = get_feasible_parallelisms(benchmark)[-1]
-        for freq in (1, 2):
+        for freq in (1,):
             #for parallelism in (max_parallelism,):
             for parallelism in (3, ):
                 # you can also use try_run instead

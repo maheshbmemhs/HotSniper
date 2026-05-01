@@ -19,6 +19,7 @@
 #include "policies/dvfsTestStaticPower.h"
 #include "policies/mapFirstUnused.h"
 #include "policies/pcgov.h"
+#include "policies/migrationAt50Percent.h"
 
 #include <iomanip>
 #include <random>
@@ -356,12 +357,17 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
  * Initialize the migration policy to the policy with the given name
  */
 void SchedulerOpen::initMigrationPolicy(String policyName) {
-	cout << "[Scheduler] [Info]: Initializing migration policy" << endl;
+	cout << "[Scheduler] [Info]: Initializing migration policy: " << policyName << endl;
 	if (policyName == "off") {
 		migrationPolicy = NULL;
+	}
+	else if (policyName == "at50percent") {
+		// Read expected duration from configuration (in nanoseconds)
+		long expectedDuration = Sim()->getCfg()->getInt("scheduler/open/migration/expected_duration");
+		migrationPolicy = new MigrationAt50Percent(SubsecondTime::NS(expectedDuration));
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
-		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
+		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm: " << policyName << endl;
  		exit (1);
 	}
 }

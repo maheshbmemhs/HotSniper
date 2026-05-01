@@ -1,0 +1,9 @@
+name	state	ips	cpi	temp	power
+blackscholes-simsmall-2	1.00	1.46	0.66	53.03	0.85
+blackscholes-simsmall-2	2.00	2.94	0.66	59.53	1.35
+blackscholes-simsmall-2	3.00	4.33	0.69	65.30	2.10
+blackscholes-simsmall-2	4.00	5.71	0.70	71.00	3.05
+canneal-simsmall-2	1.00	0.72	1.38	51.20	0.62
+canneal-simsmall-2	2.00	1.31	1.52	56.90	1.05
+canneal-simsmall-2	3.00	1.88	1.60	63.10	1.68
+canneal-simsmall-2	4.00	2.44	1.64	69.40	2.42

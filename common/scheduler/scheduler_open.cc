@@ -15,8 +15,10 @@
 
 #include "policies/dvfsMaxFreq.h"
 #include "policies/dvfsFixedPower.h"
+#include "policies/dvfsFixedStates.h"
 #include "policies/dvfsTSP.h"
 #include "policies/dvfsTestStaticPower.h"
+#include "policies/migration_h1.h"
 #include "policies/mapFirstUnused.h"
 #include "policies/pcgov.h"
 
@@ -326,6 +328,12 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 	} else if (policyName == "fixedPower") {
 		float perCorePowerBudget = Sim()->getCfg()->getFloat("scheduler/open/dvfs/fixed_power/per_core_power_budget");
 		dvfsPolicy = new DVFSFixedPower(performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize, perCorePowerBudget);
+	} else if (policyName == "fixedStates") {
+		vector<int> frequencies;
+		for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
+			frequencies.push_back(Sim()->getCfg()->getIntArray("scheduler/open/dvfs/fixed_states/frequency", coreCounter));
+		}
+		dvfsPolicy = new DVFSFixedStates(numberOfCores, frequencies);
 	} else if (policyName == "PCGov") {
 		double ambientTemperature = Sim()->getCfg()->getFloat("periodic_thermal/ambient_temperature");
 		double maxTemperature = Sim()->getCfg()->getFloat("periodic_thermal/max_temperature");
@@ -359,6 +367,22 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 	cout << "[Scheduler] [Info]: Initializing migration policy" << endl;
 	if (policyName == "off") {
 		migrationPolicy = NULL;
+	} else if (policyName == "heuristicH1") {
+		int numStates = Sim()->getCfg()->getInt("scheduler/open/heuristic_h1/num_states");
+		vector<double> enabledStates;
+		for (int state = 0; state < numStates; state++) {
+			enabledStates.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/heuristic_h1/state_value", state));
+		}
+
+		vector<int> coreToState;
+		for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
+			coreToState.push_back(Sim()->getCfg()->getIntArray("scheduler/open/heuristic_h1/core_state", coreCounter));
+		}
+
+		double targetIPS = Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/target_ips");
+		string profileFile = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/profile_file");
+		bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/debug", false);
+		migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, profileFile, debug);
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;

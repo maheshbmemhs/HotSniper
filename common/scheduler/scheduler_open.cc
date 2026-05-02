@@ -17,9 +17,11 @@
 #include "policies/dvfsFixedPower.h"
 #include "policies/dvfsTSP.h"
 #include "policies/dvfsTestStaticPower.h"
+#include "policies/dvfsOndemand.h"
 #include "policies/mapFirstUnused.h"
 #include "policies/pcgov.h"
 #include "policies/migrationAt50Percent.h"
+#include "policies/coldestCore.h"
 
 #include <iomanip>
 #include <random>
@@ -307,7 +309,11 @@ void SchedulerOpen::initMappingPolicy(String policyName) {
 		String inactivePowerFileName = Sim()->getCfg()->getString("periodic_thermal/inactive_power_file");
 		thermalComponentModel = new ThermalComponentModel((unsigned int)coreRows, (unsigned int)coreColumns, (unsigned int)nodesPerCore, thermalModelFilename, floorplanFileName, inactivePowerFileName, ambientTemperature, maxTemperature, inactivePower, tdp, performanceCounters);
 		mappingPolicy = new PCGov(thermalComponentModel, performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize, delta);
-	} else {
+	} else if (policyName == "coldestCore") {
+		float criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/coldestCore/criticalTemperature");
+		mappingPolicy = new ColdestCore(performanceCounters, coreRows, coreColumns, criticalTemperature);
+	} //else if (policyName ="XYZ") {... } //Place to instantiate a new mapping logic. Implementation is put in "policies" package.
+	else {
 		cout << "\n[Scheduler] [Error]: Unknown Mapping Algorithm" << endl;
  		exit (1);
 	}
@@ -347,6 +353,23 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 		String thermalModelFilename = Sim()->getCfg()->getString("periodic_thermal/thermal_model");
 		thermalModel = new ThermalModel((unsigned int)coreRows, (unsigned int)coreColumns, thermalModelFilename, ambientTemperature, maxTemperature, inactivePower, tdp);
 		dvfsPolicy = new DVFSTSP(thermalModel, performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize);
+	} else if (policyName == "ondemand") {
+		float upThreshold = Sim()->getCfg()->getFloat("scheduler/open/dvfs/ondemand/up_threshold");
+		float downThreshold = Sim()->getCfg()->getFloat("scheduler/open/dvfs/ondemand/down_threshold");
+		float dtmCriticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/dvfs/ondemand/dtm_cricital_temperature");
+		float dtmRecoveredTemperature = Sim()->getCfg()->getFloat("scheduler/open/dvfs/ondemand/dtm_recovered_temperature");
+		dvfsPolicy = new DVFSOndemand(
+			performanceCounters,
+			coreRows,
+			coreColumns,
+			minFrequency,
+			maxFrequency,
+			frequencyStepSize,
+			upThreshold,
+			downThreshold,
+			dtmCriticalTemperature,
+			dtmRecoveredTemperature
+		);
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);
@@ -365,6 +388,9 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 		// Read expected duration from configuration (in nanoseconds)
 		long expectedDuration = Sim()->getCfg()->getInt("scheduler/open/migration/expected_duration");
 		migrationPolicy = new MigrationAt50Percent(SubsecondTime::NS(expectedDuration));
+	} else if (policyName == "coldestCore") {
+		float criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/coldestCore/criticalTemperature");
+		migrationPolicy = new ColdestCore(performanceCounters, coreRows, coreColumns, criticalTemperature);
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm: " << policyName << endl;

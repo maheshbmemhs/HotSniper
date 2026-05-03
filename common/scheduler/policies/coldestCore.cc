@@ -21,7 +21,6 @@ std::vector<int> ColdestCore::map( //Initial placement decision
 
     std::vector<bool> availableCores(availableCoresRO);
     std::vector<int> cores;
-
     logTemperatures(availableCores);
 
     for (; taskCoreRequirement > 0; taskCoreRequirement--) {

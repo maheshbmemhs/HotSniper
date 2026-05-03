@@ -307,8 +307,16 @@ def ondemand_demo():
     run(['{:.1f}GHz'.format(4), 'ondemand', 'fastDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 def coldestcore_demo():
-    run(['{:.1f}GHz'.format(2.4), 'maxFreq', 'slowDVFS', 'coldestCore'],
+    run(['{:.1f}GHz'.format(4), 'maxFreq', 'slowDVFS', 'coldestCore'],
         get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+
+def combined_demo():
+    # This will use coldestCore + ondemand together
+    run(['{:.1f}GHz'.format(4), 'coldestCore', 'ondemand', 'fastDVFS'], 
+        get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+
+def fixedfreq_demo():
+    run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 def example_symmetric_perforation():
     for benchmark in (
@@ -388,7 +396,9 @@ def main():
     # example_asymmetric_perforation()
     # example_pcgov()
     # ondemand_demo()
-    coldestcore_demo()
+    # coldestcore_demo()
+    # combined_demo()
+    fixedfreq_demo()
     
 if __name__ == '__main__':
     main()

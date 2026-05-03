@@ -56,9 +56,10 @@ std::vector<migration> migrationSota::migrate(
 
     for (int c = 0; c < coreRows * coreColumns; c++) {
         availableCores.at(c) = taskIds.at(c) == -1;
-        threads_core[taskIds.at(c)] = c;
-        newthreads_core[taskIds.at(c)] = -1;
+        
         if(taskIds.at(c) != -1) {
+            threads_core[c] = c; //taskIds.at(c)
+            newthreads_core[c] = -1;
             tot_threads++;
         }
     }
@@ -67,8 +68,28 @@ std::vector<migration> migrationSota::migrate(
     //     threads_core[i] = -1;
     // }
 
-    int thread_idx;
+    cout << "[DEBUG] taskIds array: [";
     for (int c = 0; c < coreRows * coreColumns; c++) {
+        cout << taskIds.at(c);
+        if (c < coreRows * coreColumns - 1) cout << ", ";
+    }
+    cout << "]" << endl;
+
+
+    cout << "[DEBUG] Total threads found: " << tot_threads << endl;
+    cout << "[DEBUG] Threads in system:" << endl;
+    for (auto& pair : threads_core) {
+        cout << "  Thread " << pair.first << " currently on core " << pair.second << endl;
+    }
+
+    int thread_idx;
+    std::unordered_map<int, int> threads_power;
+    for (int c = 0; c < coreRows * coreColumns; c++) {
+        cout << "[DEBUG] Processing core " << c << ", threads available for assignment:" << endl;
+        for (auto& pair : threads_power) {
+            cout << "  Thread " << pair.first << " power=" << pair.second << endl;
+        }
+
         std::unordered_map<int, int> threads_power;
         for (auto& pair : newthreads_core){
             if(newthreads_core[pair.first] == -1) {
@@ -90,6 +111,7 @@ std::vector<migration> migrationSota::migrate(
 
         if(maxVal != -1) {
             newthreads_core[thread_idx] = c;
+            cout << "[DEBUG] Core " << c << " assigned thread " << thread_idx << " with power " << maxVal << endl;
         }
     }
 
@@ -121,6 +143,13 @@ std::vector<migration> migrationSota::migrate(
             migrations.push_back(m);
         }
         
+    }
+    
+    cout << "[DEBUG] Total migrations: " << migrations.size() << endl;
+    for (size_t i = 0; i < migrations.size(); i++) {
+        cout << "[DEBUG] Migration " << i << ": Thread from core " 
+             << migrations[i].fromCore << " -> core " << migrations[i].toCore 
+             << " (swap=" << (migrations[i].swap ? "true" : "false") << ")" << endl;
     }
 
     return migrations;

@@ -359,10 +359,13 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/per_core_power_guard")
 				: 0.0;
 			string profileFile = Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/profile_file").c_str();
+			string benchmarkHint = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/benchmark_hint")
+				? Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/benchmark_hint").c_str()
+				: "";
 			bool freezeMaster = Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/freeze_master",
 				Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true));
 			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/debug", false);
-			dvfsPolicy = new DVFSH1Thermal(performanceCounters, numberOfCores, enabledStates, frequencies, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, freezeMaster, debug);
+			dvfsPolicy = new DVFSH1Thermal(performanceCounters, numberOfCores, enabledStates, frequencies, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, benchmarkHint, freezeMaster, debug);
 	} else if (policyName == "PCGov") {
 		double ambientTemperature = Sim()->getCfg()->getFloat("periodic_thermal/ambient_temperature");
 		double maxTemperature = Sim()->getCfg()->getFloat("periodic_thermal/max_temperature");
@@ -429,9 +432,12 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/per_core_power_guard")
 				: 0.0;
 			string profileFile = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/profile_file").c_str();
+			string benchmarkHint = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/benchmark_hint")
+				? Sim()->getCfg()->getString("scheduler/open/heuristic_h1/benchmark_hint").c_str()
+				: "";
 			bool freezeMaster = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true);
 			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/debug", false);
-			migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, freezeMaster, debug);
+			migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, benchmarkHint, freezeMaster, debug);
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
@@ -674,6 +680,18 @@ void SchedulerOpen::migrateThread(thread_id_t thread_id, core_id_t core_id)
 		cout << "[Scheduler] [Error] could not find core of thread " << thread_id << endl;
 		exit(1);
 	}
+	bool freezeMaster = Sim()->getCfg()->getString("scheduler/open/migration/logic") == "heuristicH1"
+		&& Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true);
+	if (freezeMaster && (isAssignedMasterThread(from_core_id) || isAssignedMasterThread(core_id))) {
+		int masterCore = isAssignedMasterThread(from_core_id) ? from_core_id : core_id;
+		cout << "[MigrationH1] block migrateThread touching master thread task="
+		     << systemCores.at(masterCore).assignedTaskID
+		     << " thread=0 core=" << masterCore
+		     << " from=" << from_core_id
+		     << " to=" << core_id
+		     << endl;
+		return;
+	}
 	if (from_core_id == core_id) {
 		cout << "[Scheduler] skipped moving thread " << thread_id << " to core " << core_id << " (already there)" << endl;
 	} else {
@@ -739,6 +757,17 @@ int SchedulerOpen::getAssignedThreadNum(int coreId) const {
 	}
 
 	return threadNum;
+}
+
+bool SchedulerOpen::isAssignedMasterThread(int coreId) const {
+	if (coreId < 0 || coreId >= numberOfCores) {
+		return false;
+	}
+	if (systemCores[coreId].assignedTaskID == -1) {
+		return false;
+	}
+
+	return getAssignedThreadNum(coreId) == 0;
 }
 
 bool SchedulerOpen::executeMappingPolicy(int taskID, SubsecondTime time) {
@@ -1288,7 +1317,7 @@ void SchedulerOpen::DVFSTransitionNotDelayed(int coreCounter) {
 /**
  * Set the frequency for a core.
  */
-void SchedulerOpen::setFrequency(int coreCounter, int frequency) {
+int SchedulerOpen::setFrequency(int coreCounter, int frequency) {
 	int oldFrequency = Sim()->getMagicServer()->getFrequency(coreCounter);
 
 	if (frequency > oldFrequency + 1000) {
@@ -1303,11 +1332,13 @@ void SchedulerOpen::setFrequency(int coreCounter, int frequency) {
 
 	if (delayDVFSTransition(coreCounter, oldFrequency, frequency)) {
 		DVFSTransitionDelayed(coreCounter, oldFrequency, frequency);
+		return oldFrequency;
 	} else {
 		DVFSTransitionNotDelayed(coreCounter);
 		if (frequency != oldFrequency) {
 			Sim()->getMagicServer()->setFrequency(coreCounter, frequency);
 		}
+		return frequency;
 	}
 }
 
@@ -1350,8 +1381,23 @@ void SchedulerOpen::executeDVFSPolicy() {
 		activeCores.push_back(reserved_cores_are_active ? isAssignedToTask(coreCounter) : isAssignedToThread(coreCounter));
 	}
 	vector<int> frequencies = dvfsPolicy->getFrequencies(oldFrequencies, taskIds, threadIds, activeCores);
+	bool freezeMaster = Sim()->getCfg()->getString("scheduler/open/dvfs/logic") == "heuristicH1DVFS"
+		&& Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/freeze_master",
+			Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true));
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
-		setFrequency(coreCounter, frequencies.at(coreCounter));
+		if (freezeMaster && isAssignedMasterThread(coreCounter)) {
+			int oldFrequency = oldFrequencies.at(coreCounter);
+			if (frequencies.at(coreCounter) != oldFrequency) {
+				cout << "[DVFSH1Thermal] freeze master thread task="
+				     << systemCores.at(coreCounter).assignedTaskID
+				     << " thread=0 core=" << coreCounter
+				     << " frequency=" << oldFrequency
+				     << " override_requested_frequency=" << frequencies.at(coreCounter)
+				     << endl;
+			}
+			frequencies.at(coreCounter) = oldFrequency;
+		}
+		frequencies.at(coreCounter) = setFrequency(coreCounter, frequencies.at(coreCounter));
 	}
 	performanceCounters->notifyFreqsOfCores(frequencies);
 }
@@ -1372,8 +1418,25 @@ void SchedulerOpen::executeMigrationPolicy(SubsecondTime time) {
 		activeCores.push_back(reserved_cores_are_active ? isAssignedToTask(coreCounter) : isAssignedToThread(coreCounter));
 	}
 	std::vector<migration> migrations = migrationPolicy->migrate(time, taskIds, threadIds, activeCores);
+	bool freezeMaster = Sim()->getCfg()->getString("scheduler/open/migration/logic") == "heuristicH1"
+		&& Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true);
 
 	for (migration &migration : migrations) {
+		if (migration.fromCore >= (unsigned int)numberOfCores || migration.toCore >= (unsigned int)numberOfCores) {
+			cout << "\n[Scheduler][Error]: Migration Policy ordered migration with invalid core id.\n";
+			exit (1);
+		}
+		if (freezeMaster && (isAssignedMasterThread(migration.fromCore) || isAssignedMasterThread(migration.toCore))) {
+			unsigned int masterCore = isAssignedMasterThread(migration.fromCore) ? migration.fromCore : migration.toCore;
+			cout << "[MigrationH1] block migration touching master thread task="
+			     << systemCores.at(masterCore).assignedTaskID
+			     << " thread=0 core=" << masterCore
+			     << " from=" << migration.fromCore
+			     << " to=" << migration.toCore
+			     << " swap=" << (migration.swap ? "true" : "false")
+			     << endl;
+			return;
+		}
 		if (systemCores.at(migration.fromCore).assignedTaskID == -1) {
 			cout << "\n[Scheduler][Error]: Migration Policy ordered migration from unused core.\n";		
 			exit (1);

@@ -27,6 +27,7 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
 	                             double powerBudgetMargin,
 	                             double perCorePowerGuard,
 	                             const string &profileFile,
+	                             const string &benchmarkHint,
 	                             bool freezeMaster,
 	                             bool debug)
     : performanceCounters(performanceCounters)
@@ -41,6 +42,7 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
 	    , powerBudgetMargin(powerBudgetMargin)
 	    , perCorePowerGuard(perCorePowerGuard)
 	    , profileFile(profileFile)
+	    , benchmarkHint(benchmarkHint)
 	    , freezeMaster(freezeMaster)
 	    , debug(debug)
 	    , warnedFallback(false)
@@ -134,8 +136,22 @@ bool DVFSH1Thermal::hasAllEnabledStates(const string &benchmarkName) const
     return true;
 }
 
-string DVFSH1Thermal::findNearestBenchmark(double currentStateValue, double measuredIPS) const
+string DVFSH1Thermal::findNearestBenchmark(double currentStateValue, double measuredIPS, double measuredPower) const
 {
+    if (benchmarkHint != "") {
+        if (hasAllEnabledStates(benchmarkHint)) {
+            return benchmarkHint;
+        }
+
+        size_t dash = benchmarkHint.find('-');
+        if (dash != string::npos && dash + 1 < benchmarkHint.size()) {
+            string withoutSuite = benchmarkHint.substr(dash + 1);
+            if (hasAllEnabledStates(withoutSuite)) {
+                return withoutSuite;
+            }
+        }
+    }
+
     string nearestBenchmark;
     double nearestDistance = numeric_limits<double>::max();
     int currentStateKey = stateKey(currentStateValue);
@@ -150,7 +166,12 @@ string DVFSH1Thermal::findNearestBenchmark(double currentStateValue, double meas
             continue;
         }
 
-        double distance = fabs(currentState->second.ips - measuredIPS);
+        double ipsScale = max(max(fabs(currentState->second.ips), fabs(measuredIPS)), 1e-9);
+        double distance = fabs(currentState->second.ips - measuredIPS) / ipsScale;
+        if (measuredPower > 0.0 && currentState->second.power > 0.0) {
+            double powerScale = max(max(fabs(currentState->second.power), fabs(measuredPower)), 1e-9);
+            distance += fabs(currentState->second.power - measuredPower) / powerScale;
+        }
         if (distance < nearestDistance) {
             nearestDistance = distance;
             nearestBenchmark = benchmark->first;
@@ -286,7 +307,7 @@ void DVFSH1Thermal::buildPrediction(unsigned int coreId,
     double measuredPower = getMeasuredPower(coreId);
     double measuredTemp = getMeasuredTemperature(coreId);
 
-    nearestBenchmark = findNearestBenchmark(currentStateValue, measuredIPS);
+    nearestBenchmark = findNearestBenchmark(currentStateValue, measuredIPS, measuredPower);
     if (nearestBenchmark == "") {
         if (!warnedFallback) {
             cout << "[DVFSH1Thermal][Warning]: no valid nearest benchmark with all enabled states found; using conservative measured fallback predictions." << endl;
@@ -307,6 +328,10 @@ void DVFSH1Thermal::buildPrediction(unsigned int coreId,
     }
 
     ProfileMap::const_iterator benchmark = profile.find(nearestBenchmark);
+    StateProfile::const_iterator currentEntry = benchmark->second.find(stateKey(currentStateValue));
+    double baseIPS = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.ips;
+    double basePower = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.power;
+    double baseTemp = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.temp;
     for (unsigned int state = 0; state < enabledStates.size(); state++) {
         StateProfile::const_iterator entry = benchmark->second.find(stateKey(enabledStates.at(state)));
         if (entry == benchmark->second.end()) {
@@ -314,9 +339,15 @@ void DVFSH1Thermal::buildPrediction(unsigned int coreId,
             predPower.at(state) = measuredPower;
             predTemp.at(state) = measuredTemp > 0.0 ? measuredTemp : tempLimit();
         } else {
-            predIPS.at(state) = entry->second.ips;
-            predPower.at(state) = entry->second.power;
-            predTemp.at(state) = entry->second.temp;
+            predIPS.at(state) = (measuredIPS > 0.0 && baseIPS > 0.0)
+                ? measuredIPS * entry->second.ips / baseIPS
+                : entry->second.ips;
+            predPower.at(state) = (measuredPower > 0.0 && basePower > 0.0)
+                ? measuredPower * entry->second.power / basePower
+                : entry->second.power;
+            predTemp.at(state) = (measuredTemp > 0.0 && baseTemp > 0.0)
+                ? max(0.0, measuredTemp + entry->second.temp - baseTemp)
+                : entry->second.temp;
         }
     }
 }

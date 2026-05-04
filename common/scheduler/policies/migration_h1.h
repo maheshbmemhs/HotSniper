@@ -26,6 +26,7 @@ public:
                 double powerBudgetMargin,
                 double perCorePowerGuard,
                 const std::string &profileFile,
+                const std::string &benchmarkHint,
                 bool freezeMaster,
                 bool debug = false);
 
@@ -68,6 +69,7 @@ private:
     double powerBudgetMargin;
     double perCorePowerGuard;
     std::string profileFile;
+    std::string benchmarkHint;
     bool freezeMaster;
     bool debug;
     bool warnedFallback;
@@ -78,7 +80,7 @@ private:
     void loadProfile();
     int stateKey(double state) const;
     bool hasAllEnabledStates(const std::string &benchmarkName) const;
-    std::string findNearestBenchmark(double currentStateValue, double measuredIPS) const;
+    std::string findNearestBenchmark(double currentStateValue, double measuredIPS, double measuredPower) const;
 
     bool isMasterCore(const std::vector<int> &taskIds, const std::vector<int> &threadIds, unsigned int coreId) const;
     std::vector<unsigned int> getActiveCoreIds(const std::vector<int> &taskIds, const std::vector<int> &threadIds, const std::vector<bool> &activeCores) const;

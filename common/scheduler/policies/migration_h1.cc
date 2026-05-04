@@ -24,6 +24,7 @@ MigrationH1::MigrationH1(const PerformanceCounters *performanceCounters,
                          double powerBudgetMargin,
                          double perCorePowerGuard,
                          const string &profileFile,
+                         const string &benchmarkHint,
                          bool freezeMaster,
                          bool debug)
     : performanceCounters(performanceCounters)
@@ -38,6 +39,7 @@ MigrationH1::MigrationH1(const PerformanceCounters *performanceCounters,
     , powerBudgetMargin(powerBudgetMargin)
     , perCorePowerGuard(perCorePowerGuard)
     , profileFile(profileFile)
+    , benchmarkHint(benchmarkHint)
     , freezeMaster(freezeMaster)
     , debug(debug)
     , warnedFallback(false)
@@ -140,8 +142,22 @@ bool MigrationH1::hasAllEnabledStates(const string &benchmarkName) const
     return true;
 }
 
-string MigrationH1::findNearestBenchmark(double currentStateValue, double measuredIPS) const
+string MigrationH1::findNearestBenchmark(double currentStateValue, double measuredIPS, double measuredPower) const
 {
+    if (benchmarkHint != "") {
+        if (hasAllEnabledStates(benchmarkHint)) {
+            return benchmarkHint;
+        }
+
+        size_t dash = benchmarkHint.find('-');
+        if (dash != string::npos && dash + 1 < benchmarkHint.size()) {
+            string withoutSuite = benchmarkHint.substr(dash + 1);
+            if (hasAllEnabledStates(withoutSuite)) {
+                return withoutSuite;
+            }
+        }
+    }
+
     string nearestBenchmark;
     double nearestDistance = numeric_limits<double>::max();
     int currentStateKey = stateKey(currentStateValue);
@@ -156,7 +172,12 @@ string MigrationH1::findNearestBenchmark(double currentStateValue, double measur
             continue;
         }
 
-        double distance = fabs(currentState->second.ips - measuredIPS);
+        double ipsScale = max(max(fabs(currentState->second.ips), fabs(measuredIPS)), 1e-9);
+        double distance = fabs(currentState->second.ips - measuredIPS) / ipsScale;
+        if (measuredPower > 0.0 && currentState->second.power > 0.0) {
+            double powerScale = max(max(fabs(currentState->second.power), fabs(measuredPower)), 1e-9);
+            distance += fabs(currentState->second.power - measuredPower) / powerScale;
+        }
         if (distance < nearestDistance) {
             nearestDistance = distance;
             nearestBenchmark = benchmark->first;
@@ -333,7 +354,7 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
         double measuredPower = getMeasuredPower(coreId);
         double measuredTemp = getMeasuredTemperature(coreId);
 
-        string nearestBenchmark = findNearestBenchmark(currentStateValue, measuredIPS);
+        string nearestBenchmark = findNearestBenchmark(currentStateValue, measuredIPS, measuredPower);
         if (nearestBenchmark == "") {
             if (!warnedFallback) {
                 cout << "[MigrationH1][Warning]: no valid nearest benchmark with all enabled states found; using conservative measured fallback predictions." << endl;
@@ -352,6 +373,10 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
             }
         } else {
             ProfileMap::const_iterator benchmark = profile.find(nearestBenchmark);
+            StateProfile::const_iterator currentEntry = benchmark->second.find(stateKey(currentStateValue));
+            double baseIPS = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.ips;
+            double basePower = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.power;
+            double baseTemp = currentEntry == benchmark->second.end() ? 0.0 : currentEntry->second.temp;
             for (unsigned int state = 0; state < enabledStates.size(); state++) {
                 StateProfile::const_iterator entry = benchmark->second.find(stateKey(enabledStates.at(state)));
                 if (entry == benchmark->second.end()) {
@@ -359,9 +384,15 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
                     predPower.at(item).at(state) = measuredPower;
                     predTemp.at(item).at(state) = measuredTemp > 0.0 ? measuredTemp : tempLimit();
                 } else {
-                    predIPS.at(item).at(state) = entry->second.ips;
-                    predPower.at(item).at(state) = entry->second.power;
-                    predTemp.at(item).at(state) = entry->second.temp;
+                    predIPS.at(item).at(state) = (measuredIPS > 0.0 && baseIPS > 0.0)
+                        ? measuredIPS * entry->second.ips / baseIPS
+                        : entry->second.ips;
+                    predPower.at(item).at(state) = (measuredPower > 0.0 && basePower > 0.0)
+                        ? measuredPower * entry->second.power / basePower
+                        : entry->second.power;
+                    predTemp.at(item).at(state) = (measuredTemp > 0.0 && baseTemp > 0.0)
+                        ? max(0.0, measuredTemp + entry->second.temp - baseTemp)
+                        : entry->second.temp;
                 }
             }
         }

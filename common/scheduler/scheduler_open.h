@@ -42,6 +42,7 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		bool isAssignedToTask(int coreId);
 		bool isAssignedToThread(int coreId);
 		int getAssignedThreadNum(int coreId) const;
+		bool isAssignedMasterThread(int coreId) const;
 
 		DVFSPolicy *dvfsPolicy = NULL;
 		long dvfsEpoch;
@@ -53,7 +54,7 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		bool delayDVFSTransition(int coreCounter, int oldFrequency, int newFrequency);
 		void DVFSTransitionDelayed(int coreCounter, int oldFrequency, int newFrequency);
 		void DVFSTransitionNotDelayed(int coreCounter);
-		void setFrequency(int coreCounter, int frequency);
+		int setFrequency(int coreCounter, int frequency);
 		ThermalComponentModel *thermalComponentModel;
 		ThermalModel *thermalModel;
 		int minFrequency;

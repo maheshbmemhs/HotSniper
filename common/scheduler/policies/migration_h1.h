@@ -26,9 +26,11 @@ public:
                 double powerBudgetMargin,
                 double perCorePowerGuard,
                 const std::string &profileFile,
+                bool freezeMaster,
                 bool debug = false);
 
     virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores);
+    virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<int> &threadIds, const std::vector<bool> &activeCores);
 
 private:
     struct ProfileEntry {
@@ -66,6 +68,7 @@ private:
     double powerBudgetMargin;
     double perCorePowerGuard;
     std::string profileFile;
+    bool freezeMaster;
     bool debug;
     bool warnedFallback;
     bool warnedInvalidPowerBudget;
@@ -77,13 +80,15 @@ private:
     bool hasAllEnabledStates(const std::string &benchmarkName) const;
     std::string findNearestBenchmark(double currentStateValue, double measuredIPS) const;
 
-    std::vector<unsigned int> getActiveCoreIds(const std::vector<int> &taskIds, const std::vector<bool> &activeCores) const;
+    bool isMasterCore(const std::vector<int> &taskIds, const std::vector<int> &threadIds, unsigned int coreId) const;
+    std::vector<unsigned int> getActiveCoreIds(const std::vector<int> &taskIds, const std::vector<int> &threadIds, const std::vector<bool> &activeCores) const;
     int getStateForCore(unsigned int coreId) const;
     double getMeasuredIPSBillions(unsigned int coreId, double currentStateValue) const;
     double getMeasuredPower(unsigned int coreId) const;
     double getMeasuredTemperature(unsigned int coreId) const;
     bool isThermalObjective() const;
     bool isPowerBudgetObjective() const;
+    bool isTargetIPSMinPowerObjective() const;
     bool isTargetIPSObjective() const;
     double tempLimit() const;
     double effectivePowerBudget() const;
@@ -94,23 +99,35 @@ private:
                           std::vector<std::vector<double> > &predTemp);
 
     std::vector<int> runH1(const std::vector<unsigned int> &activeCoreIds,
+                           const std::vector<int> &taskIds,
+                           const std::vector<int> &threadIds,
                            const std::vector<std::vector<double> > &predIPS,
                            const std::vector<std::vector<double> > &predPower);
 
     std::vector<int> runThermalMaxIPS(const std::vector<unsigned int> &activeCoreIds,
                                       const std::vector<int> &taskIds,
+                                      const std::vector<int> &threadIds,
                                       const std::vector<std::vector<double> > &predIPS,
                                       const std::vector<std::vector<double> > &predPower,
                                       const std::vector<std::vector<double> > &predTemp,
                                       ThermalCandidate &selected) const;
     std::vector<int> runPowerBudgetMaxIPS(const std::vector<unsigned int> &activeCoreIds,
                                           const std::vector<int> &taskIds,
+                                          const std::vector<int> &threadIds,
+                                          const std::vector<std::vector<double> > &predIPS,
+                                          const std::vector<std::vector<double> > &predPower,
+                                          const std::vector<std::vector<double> > &predTemp,
+                                          ThermalCandidate &selected) const;
+    std::vector<int> runTargetIPSMinPower(const std::vector<unsigned int> &activeCoreIds,
+                                          const std::vector<int> &taskIds,
+                                          const std::vector<int> &threadIds,
                                           const std::vector<std::vector<double> > &predIPS,
                                           const std::vector<std::vector<double> > &predPower,
                                           const std::vector<std::vector<double> > &predTemp,
                                           ThermalCandidate &selected) const;
     std::vector<int> getAvailableFixedCores(const std::vector<unsigned int> &activeCoreIds,
-                                            const std::vector<int> &taskIds) const;
+                                            const std::vector<int> &taskIds,
+                                            const std::vector<int> &threadIds) const;
     ThermalCandidate evaluateThermalCandidate(const std::vector<unsigned int> &activeCoreIds,
                                               const std::vector<int> &desiredCore,
                                               const std::vector<std::vector<double> > &predIPS,
@@ -121,19 +138,29 @@ private:
                                                   const std::vector<std::vector<double> > &predIPS,
                                                   const std::vector<std::vector<double> > &predPower,
                                                   const std::vector<std::vector<double> > &predTemp) const;
+    ThermalCandidate evaluateTargetIPSCandidate(const std::vector<unsigned int> &activeCoreIds,
+                                                const std::vector<int> &desiredCore,
+                                                const std::vector<std::vector<double> > &predIPS,
+                                                const std::vector<std::vector<double> > &predPower,
+                                                const std::vector<std::vector<double> > &predTemp) const;
     bool isBetterThermalCandidate(const ThermalCandidate &candidate,
                                   const ThermalCandidate &best,
                                   bool requireFeasible) const;
     bool isBetterPowerBudgetCandidate(const ThermalCandidate &candidate,
                                       const ThermalCandidate &best,
                                       bool requireFeasible) const;
+    bool isBetterTargetIPSCandidate(const ThermalCandidate &candidate,
+                                    const ThermalCandidate &best,
+                                    bool requireFeasible) const;
 
     std::vector<migration> convertDesiredStatesToMigrations(const std::vector<unsigned int> &activeCoreIds,
                                                             const std::vector<int> &desiredState,
-                                                            const std::vector<int> &taskIds) const;
+                                                            const std::vector<int> &taskIds,
+                                                            const std::vector<int> &threadIds) const;
     std::vector<migration> convertDesiredCoresToMigrations(const std::vector<unsigned int> &activeCoreIds,
                                                            const std::vector<int> &desiredCore,
-                                                           const std::vector<int> &taskIds) const;
+                                                           const std::vector<int> &taskIds,
+                                                           const std::vector<int> &threadIds) const;
 
     double predictedTotalIPS(const std::vector<std::vector<double> > &predIPS, const std::vector<int> &states) const;
     double predictedCurrentIPS(const std::vector<unsigned int> &activeCoreIds, const std::vector<std::vector<double> > &predIPS) const;

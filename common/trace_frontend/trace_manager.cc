@@ -123,7 +123,7 @@ thread_id_t TraceManager::newThread(app_id_t app_id, bool first, bool init_fifo,
    }
 
    m_num_threads_running++;
-   Thread *thread = Sim()->getThreadManager()->createThread(app_id, creator_thread_id, app_name);
+   Thread *thread = Sim()->getThreadManager()->createThread(app_id, creator_thread_id, app_name, thread_num);
 	
    TraceThread *tthread = new TraceThread(thread, time, tracefile, responsefile, app_id, init_fifo /*cleaup*/);
    m_threads.push_back(tthread);

@@ -1,0 +1,28 @@
+{
+"experiments": [
+    {
+        "name":"symmetric-2-core",
+        "output_dir":"./txt_out/streamcluster/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"symmetric-3-core",
+        "output_dir":"./txt_out/streamcluster/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"symmetric-4-core",
+        "output_dir":"./txt_out/streamcluster/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"high-asymmetric-4-core",
+        "output_dir":"./txt_out/streamcluster/",
+        "runs": [
+        ]
+    }
+]
+}

@@ -1,0 +1,38 @@
+{
+"experiments": [
+    {
+        "name":"symmetric-2-core",
+        "output_dir":"./txt_out/blackscholes/",
+        "runs": [
+        {
+            "path": "/home/homuracat/HotSniper/results/results_2026-05-04_10.53_fixedStates+slowDVFS_parsec-blackscholes-simsmall-2",
+            "name": "1"
+        }
+        ]
+    },
+    {
+        "name":"symmetric-3-core",
+        "output_dir":"./txt_out/blackscholes/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"symmetric-4-core",
+        "output_dir":"./txt_out/blackscholes/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"high-asymmetric-4-core",
+        "output_dir":"./txt_out/blackscholes/",
+        "runs": [
+        ]
+    },
+    {
+        "name":"low-asymmetric-4-core",
+        "output_dir":"./txt_out/blackscholes/",
+        "runs": [
+        ]
+    }
+]
+}

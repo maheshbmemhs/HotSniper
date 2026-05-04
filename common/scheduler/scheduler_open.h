@@ -41,6 +41,7 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		int getCoreNb(int y, int x);
 		bool isAssignedToTask(int coreId);
 		bool isAssignedToThread(int coreId);
+		int getAssignedThreadNum(int coreId) const;
 
 		DVFSPolicy *dvfsPolicy = NULL;
 		long dvfsEpoch;

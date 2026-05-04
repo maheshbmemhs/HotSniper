@@ -332,6 +332,7 @@ def h1_overrides(profile_file,
                  power_budget,
                  power_budget_margin,
                  per_core_power_guard,
+                 freeze_master=True,
                  debug=False,
                  migration_epoch=1000000,
                  dvfs_epoch=1000000):
@@ -339,7 +340,7 @@ def h1_overrides(profile_file,
     core_state = '0,1,2,3'
     frequencies = '1000,2000,3000,4000'
     profile_file = os.path.abspath(profile_file)
-    objective = 'power_budget_max_ips'
+    objective = 'target_ips_min_power'
     return {
         'scheduler/open/migration/epoch': migration_epoch,
         'scheduler/open/heuristic_h1/objective': objective,
@@ -353,6 +354,7 @@ def h1_overrides(profile_file,
         'scheduler/open/heuristic_h1/core_state': core_state,
         'scheduler/open/heuristic_h1/target_ips': target_ips,
         'scheduler/open/heuristic_h1/profile_file': profile_file,
+        'scheduler/open/heuristic_h1/freeze_master': freeze_master,
         'scheduler/open/heuristic_h1/debug': debug,
         'scheduler/open/dvfs/dvfs_epoch': dvfs_epoch,
         'scheduler/open/dvfs/fixed_states/frequency': frequencies,
@@ -365,7 +367,9 @@ def h1_overrides(profile_file,
         'scheduler/open/dvfs/heuristic_h1/num_states': 4,
         'scheduler/open/dvfs/heuristic_h1/state_value': states,
         'scheduler/open/dvfs/heuristic_h1/frequency': frequencies,
+        'scheduler/open/dvfs/heuristic_h1/target_ips': target_ips,
         'scheduler/open/dvfs/heuristic_h1/profile_file': profile_file,
+        'scheduler/open/dvfs/heuristic_h1/freeze_master': freeze_master,
         'scheduler/open/dvfs/heuristic_h1/debug': debug,
     }
 
@@ -380,6 +384,7 @@ def h1_experiment(benchmark='parsec-blackscholes',
                   power_budget=0.0,
                   power_budget_margin=1.0,
                   per_core_power_guard=0.0,
+                  freeze_master=True,
                   include_maxfreq=False,
                   debug=False,
                   ignore_error=False):
@@ -389,9 +394,6 @@ def h1_experiment(benchmark='parsec-blackscholes',
         print('[H1 experiment] replace --profile-file with your measured profile for real results.')
 
     workload = get_instance(benchmark, parallelism, input_set=input_set)
-    if power_budget <= 0.0:
-        print('[H1 experiment][Warning] objective=power_budget_max_ips but --power-budget={} <= 0; dynamic H1 optimization will fall back safely.'.format(power_budget))
-
     overrides = h1_overrides(profile_file,
                              target_ips,
                              max_temp,
@@ -399,6 +401,7 @@ def h1_experiment(benchmark='parsec-blackscholes',
                              power_budget,
                              power_budget_margin,
                              per_core_power_guard,
+                             freeze_master=freeze_master,
                              debug=debug)
     dvfs_overrides = dict(overrides)
     dvfs_overrides['scheduler/open/migration/logic'] = 'off'
@@ -531,19 +534,23 @@ def test_static_power():
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == 'h1':
-        parser = argparse.ArgumentParser(description='Run the 4-core H1 power-budgeted fixed-VF and per-core DVFS experiments.')
+        parser = argparse.ArgumentParser(description='Run the 4-core H1 target-IPS/min-power fixed-VF and per-core DVFS experiments.')
         parser.add_argument('--benchmark', default='parsec-blackscholes')
         parser.add_argument('--parallelism', type=int, default=4)
         parser.add_argument('--input-set', default='simsmall')
         parser.add_argument('--profile-file', default=None)
         parser.add_argument('--target-ips', type=float, default=10.0,
-                            help='Backward-compatible target throughput for non-power-budget H1 mode.')
+                            help='Predicted total IPS target for target_ips_min_power.')
         parser.add_argument('--power-budget', type=float, default=0.0,
-                            help='Total predicted power budget for power_budget_max_ips.')
+                            help='Backward-compatible total predicted power budget for old power_budget_max_ips experiments.')
         parser.add_argument('--power-budget-margin', type=float, default=1.0,
                             help='Multiplier applied to --power-budget before scheduling.')
         parser.add_argument('--per-core-power-guard', type=float, default=0.0,
                             help='Optional per-core predicted power cap; 0 disables it.')
+        parser.add_argument('--freeze-master', dest='freeze_master', action='store_true', default=True,
+                            help='Keep task-local thread 0 out of H1 migration and DVFS optimization.')
+        parser.add_argument('--no-freeze-master', dest='freeze_master', action='store_false',
+                            help='Restore legacy behavior where task-local thread 0 participates in H1.')
         parser.add_argument('--max-temp', type=float, default=90.0)
         parser.add_argument('--thermal-margin', type=float, default=3.0)
         parser.add_argument('--include-maxfreq', action='store_true',
@@ -562,6 +569,7 @@ def main():
                       power_budget=args.power_budget,
                       power_budget_margin=args.power_budget_margin,
                       per_core_power_guard=args.per_core_power_guard,
+                      freeze_master=args.freeze_master,
                       include_maxfreq=args.include_maxfreq,
                       debug=args.debug_h1,
                       ignore_error=args.ignore_error)

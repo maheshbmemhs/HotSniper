@@ -20,6 +20,10 @@ class MigrationPolicy {
 public:
     virtual ~MigrationPolicy() {}
     virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores) = 0;
+    virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<int> &threadIds, const std::vector<bool> &activeCores)
+    {
+        return migrate(time, taskIds, activeCores);
+    }
 };
 
 #endif

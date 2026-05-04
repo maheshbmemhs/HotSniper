@@ -19,6 +19,7 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
                              int numberOfCores,
                              const vector<double> &enabledStates,
                              const vector<int> &frequencies,
+	                             double targetIPS,
 	                             const string &objective,
 	                             double maxTemp,
 	                             double thermalMargin,
@@ -26,11 +27,13 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
 	                             double powerBudgetMargin,
 	                             double perCorePowerGuard,
 	                             const string &profileFile,
+	                             bool freezeMaster,
 	                             bool debug)
     : performanceCounters(performanceCounters)
     , numberOfCores(numberOfCores)
     , enabledStates(enabledStates)
     , frequencies(frequencies)
+	    , targetIPS(targetIPS)
 	    , objective(objective)
 	    , maxTemp(maxTemp)
 	    , thermalMargin(thermalMargin)
@@ -38,6 +41,7 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
 	    , powerBudgetMargin(powerBudgetMargin)
 	    , perCorePowerGuard(perCorePowerGuard)
 	    , profileFile(profileFile)
+	    , freezeMaster(freezeMaster)
 	    , debug(debug)
 	    , warnedFallback(false)
 	    , warnedInvalidPowerBudget(false)
@@ -45,7 +49,7 @@ DVFSH1Thermal::DVFSH1Thermal(const PerformanceCounters *performanceCounters,
 	    if (this->frequencies.size() != this->enabledStates.size()) {
 	        cout << "[DVFSH1Thermal][Warning]: frequency count does not match enabled state count." << endl;
 	    }
-	    if (objective != "thermal_max_ips" && objective != "power_budget_max_ips") {
+	    if (objective != "thermal_max_ips" && objective != "power_budget_max_ips" && objective != "target_ips_min_power") {
 	        cout << "[DVFSH1Thermal][Warning]: objective=" << objective
 	             << " is unsupported for this policy; using thermal_max_ips behavior." << endl;
 	    }
@@ -239,6 +243,23 @@ bool DVFSH1Thermal::isPowerBudgetObjective() const
     return objective == "power_budget_max_ips";
 }
 
+bool DVFSH1Thermal::isTargetIPSMinPowerObjective() const
+{
+    return objective == "target_ips_min_power";
+}
+
+bool DVFSH1Thermal::isMasterCore(const vector<int> &taskIds, const vector<int> &threadIds, unsigned int coreId) const
+{
+    if (!freezeMaster) {
+        return false;
+    }
+    if (coreId >= taskIds.size() || coreId >= threadIds.size()) {
+        return false;
+    }
+
+    return taskIds.at(coreId) != -1 && threadIds.at(coreId) == 0;
+}
+
 double DVFSH1Thermal::tempLimit() const
 {
     return maxTemp - thermalMargin;
@@ -275,7 +296,7 @@ void DVFSH1Thermal::buildPrediction(unsigned int coreId,
         for (unsigned int state = 0; state < enabledStates.size(); state++) {
             double ratio = currentStateValue > 0.0 ? enabledStates.at(state) / currentStateValue : 1.0;
             predIPS.at(state) = measuredIPS * ratio;
-            predPower.at(state) = measuredPower;
+            predPower.at(state) = measuredPower > 0.0 ? measuredPower * ratio * ratio : 0.0;
             if ((int)state <= currentStateIndex) {
                 predTemp.at(state) = measuredTemp > 0.0 ? measuredTemp : tempLimit();
             } else {
@@ -381,6 +402,45 @@ DVFSH1Thermal::Candidate DVFSH1Thermal::evaluatePowerBudgetCandidate(const vecto
     return candidate;
 }
 
+DVFSH1Thermal::Candidate DVFSH1Thermal::evaluateTargetIPSCandidate(const vector<int> &chosenStates,
+                                                                   const vector<int> &currentStates,
+                                                                   const vector<vector<double> > &predIPS,
+                                                                   const vector<vector<double> > &predPower,
+                                                                   const vector<vector<double> > &predTemp) const
+{
+    Candidate candidate;
+    candidate.states = chosenStates;
+    candidate.valid = chosenStates.size() == currentStates.size();
+    candidate.feasible = false;
+    candidate.maxPredTemp = -numeric_limits<double>::max();
+
+    if (!candidate.valid) {
+        return candidate;
+    }
+
+    for (unsigned int item = 0; item < chosenStates.size(); item++) {
+        int state = chosenStates.at(item);
+        if (state < 0 || state >= (int)enabledStates.size()) {
+            candidate.valid = false;
+            return candidate;
+        }
+
+        candidate.totalIPS += predIPS.at(item).at(state);
+        candidate.totalPower += predPower.at(item).at(state);
+        candidate.maxPredTemp = max(candidate.maxPredTemp, predTemp.at(item).at(state));
+        if (state != currentStates.at(item)) {
+            candidate.changedCores++;
+        }
+    }
+
+    if (chosenStates.size() == 0) {
+        candidate.maxPredTemp = 0.0;
+    }
+
+    candidate.feasible = candidate.totalIPS + 1e-9 >= targetIPS;
+    return candidate;
+}
+
 bool DVFSH1Thermal::isBetterPowerBudgetCandidate(const Candidate &candidate,
                                                  const Candidate &best,
                                                  bool requireFeasible) const
@@ -439,6 +499,64 @@ bool DVFSH1Thermal::isBetterPowerBudgetCandidate(const Candidate &candidate,
     return candidate.changedCores < best.changedCores;
 }
 
+bool DVFSH1Thermal::isBetterTargetIPSCandidate(const Candidate &candidate,
+                                               const Candidate &best,
+                                               bool requireFeasible) const
+{
+    const double eps = 1e-9;
+    if (!candidate.valid) {
+        return false;
+    }
+    if (requireFeasible && !candidate.feasible) {
+        return false;
+    }
+    if (!best.valid) {
+        return true;
+    }
+
+    if (requireFeasible) {
+        if (candidate.totalPower < best.totalPower - eps) {
+            return true;
+        }
+        if (candidate.totalPower > best.totalPower + eps) {
+            return false;
+        }
+        if (candidate.totalIPS > best.totalIPS + eps) {
+            return true;
+        }
+        if (candidate.totalIPS < best.totalIPS - eps) {
+            return false;
+        }
+        if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+            return true;
+        }
+        if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+            return false;
+        }
+        return candidate.changedCores < best.changedCores;
+    }
+
+    if (candidate.totalIPS > best.totalIPS + eps) {
+        return true;
+    }
+    if (candidate.totalIPS < best.totalIPS - eps) {
+        return false;
+    }
+    if (candidate.totalPower < best.totalPower - eps) {
+        return true;
+    }
+    if (candidate.totalPower > best.totalPower + eps) {
+        return false;
+    }
+    if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+        return true;
+    }
+    if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+        return false;
+    }
+    return candidate.changedCores < best.changedCores;
+}
+
 vector<int> DVFSH1Thermal::selectPowerBudgetStates(const vector<int> &currentStates,
                                                    const vector<vector<double> > &predIPS,
                                                    const vector<vector<double> > &predPower,
@@ -470,6 +588,40 @@ vector<int> DVFSH1Thermal::selectPowerBudgetStates(const vector<int> &currentSta
     enumerate(0);
 
     selected = bestFeasible.valid ? bestFeasible : safest;
+    return selected.states;
+}
+
+vector<int> DVFSH1Thermal::selectTargetIPSMinPowerStates(const vector<int> &currentStates,
+                                                         const vector<vector<double> > &predIPS,
+                                                         const vector<vector<double> > &predPower,
+                                                         const vector<vector<double> > &predTemp,
+                                                         Candidate &selected) const
+{
+    Candidate bestFeasible;
+    Candidate bestFallback;
+    vector<int> chosen(currentStates.size(), 0);
+
+    function<void(unsigned int)> enumerate = [&](unsigned int item) {
+        if (item == currentStates.size()) {
+            Candidate candidate = evaluateTargetIPSCandidate(chosen, currentStates, predIPS, predPower, predTemp);
+            if (isBetterTargetIPSCandidate(candidate, bestFeasible, true)) {
+                bestFeasible = candidate;
+            }
+            if (isBetterTargetIPSCandidate(candidate, bestFallback, false)) {
+                bestFallback = candidate;
+            }
+            return;
+        }
+
+        for (unsigned int state = 0; state < enabledStates.size(); state++) {
+            chosen.at(item) = state;
+            enumerate(item + 1);
+        }
+    };
+
+    enumerate(0);
+
+    selected = bestFeasible.valid ? bestFeasible : bestFallback;
     return selected.states;
 }
 
@@ -511,20 +663,37 @@ void DVFSH1Thermal::logPrediction(unsigned int coreId,
 
 vector<int> DVFSH1Thermal::getFrequencies(const vector<int> &oldFrequencies, const vector<bool> &activeCores)
 {
+    vector<int> taskIds;
+    vector<int> threadIds;
+    return getFrequencies(oldFrequencies, taskIds, threadIds, activeCores);
+}
+
+vector<int> DVFSH1Thermal::getFrequencies(const vector<int> &oldFrequencies, const vector<int> &taskIds, const vector<int> &threadIds, const vector<bool> &activeCores)
+{
     vector<int> result(numberOfCores);
     int lowFrequency = frequencies.size() > 0 ? frequencies.at(0) : 0;
     UInt64 time = Sim()->getClockSkewMinimizationServer()->getGlobalTime().getNS();
 
     for (int core = 0; core < numberOfCores; core++) {
+        int oldFrequency = core < (int)oldFrequencies.size() ? oldFrequencies.at(core) : lowFrequency;
+        if (isMasterCore(taskIds, threadIds, core)) {
+            result.at(core) = oldFrequency;
+            cout << "[DVFSH1Thermal] freeze master thread task=" << taskIds.at(core)
+                 << " thread=" << threadIds.at(core)
+                 << " core=" << core
+                 << " frequency=" << oldFrequency << endl;
+            continue;
+        }
+
         bool isActive = core < (int)activeCores.size() && activeCores.at(core);
         if (!isActive) {
             result.at(core) = lowFrequency;
         } else {
-            result.at(core) = core < (int)oldFrequencies.size() ? oldFrequencies.at(core) : lowFrequency;
+            result.at(core) = oldFrequency;
         }
     }
 
-    if (isPowerBudgetObjective()) {
+    if (isPowerBudgetObjective() || isTargetIPSMinPowerObjective()) {
         vector<unsigned int> activeCoreIds;
         vector<int> currentStates;
         vector<vector<double> > predIPS;
@@ -534,6 +703,9 @@ vector<int> DVFSH1Thermal::getFrequencies(const vector<int> &oldFrequencies, con
         for (int core = 0; core < numberOfCores; core++) {
             bool isActive = core < (int)activeCores.size() && activeCores.at(core);
             if (!isActive) {
+                continue;
+            }
+            if (isMasterCore(taskIds, threadIds, core)) {
                 continue;
             }
 
@@ -563,6 +735,49 @@ vector<int> DVFSH1Thermal::getFrequencies(const vector<int> &oldFrequencies, con
         }
 
         if (activeCoreIds.size() == 0) {
+            return result;
+        }
+
+        if (isTargetIPSMinPowerObjective()) {
+            Candidate current = evaluateTargetIPSCandidate(currentStates, currentStates, predIPS, predPower, predTemp);
+            Candidate selected;
+            vector<int> selectedStates = selectTargetIPSMinPowerStates(currentStates, predIPS, predPower, predTemp, selected);
+            for (unsigned int item = 0; item < activeCoreIds.size() && item < selectedStates.size(); item++) {
+                int selectedState = selectedStates.at(item);
+                if (selectedState >= 0 && selectedState < (int)frequencies.size()) {
+                    result.at(activeCoreIds.at(item)) = frequencies.at(selectedState);
+                }
+            }
+
+            cout << "[DVFSH1Thermal] objective=target_ips_min_power"
+                 << " time=" << time
+                 << " active=" << activeCoreIds.size()
+                 << " target_ips=" << fixed << setprecision(4) << targetIPS
+                 << " currentTotalPredIPS=" << fixed << setprecision(4) << current.totalIPS
+                 << " selectedTotalPredIPS=" << fixed << setprecision(4) << selected.totalIPS
+                 << " currentTotalPredPower=" << fixed << setprecision(4) << current.totalPower
+                 << " selectedTotalPredPower=" << fixed << setprecision(4) << selected.totalPower
+                 << " selectedMaxProfileTemp=" << fixed << setprecision(4) << selected.maxPredTemp
+                 << " feasible=" << (selected.feasible ? "true" : "false")
+                 << " dvfs_changes=" << selected.changedCores
+                 << (selected.feasible ? "" : " reason=no_feasible_target_ips_frequency_combination")
+                 << " selectedStates=[";
+            for (unsigned int item = 0; item < selectedStates.size(); item++) {
+                if (item > 0) {
+                    cout << ",";
+                }
+                cout << fixed << setprecision(4) << enabledStates.at(selectedStates.at(item));
+            }
+            cout << "] selectedFrequencies=[";
+            for (unsigned int item = 0; item < selectedStates.size(); item++) {
+                if (item > 0) {
+                    cout << ",";
+                }
+                int selectedState = selectedStates.at(item);
+                cout << (selectedState >= 0 && selectedState < (int)frequencies.size() ? frequencies.at(selectedState) : 0);
+            }
+            cout << "]" << endl;
+
             return result;
         }
 
@@ -644,6 +859,9 @@ vector<int> DVFSH1Thermal::getFrequencies(const vector<int> &oldFrequencies, con
     for (int core = 0; core < numberOfCores; core++) {
         bool isActive = core < (int)activeCores.size() && activeCores.at(core);
         if (!isActive) {
+            continue;
+        }
+        if (isMasterCore(taskIds, threadIds, core)) {
             continue;
         }
 

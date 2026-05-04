@@ -344,6 +344,9 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 			frequencies.push_back(Sim()->getCfg()->getIntArray("scheduler/open/dvfs/heuristic_h1/frequency", state));
 		}
 			string objective = Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/objective").c_str();
+			double targetIPS = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/target_ips")
+				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/target_ips")
+				: 10.0;
 			double maxTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/max_temp");
 			double thermalMargin = Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/thermal_margin");
 			double powerBudget = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/power_budget")
@@ -356,8 +359,10 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/per_core_power_guard")
 				: 0.0;
 			string profileFile = Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/profile_file").c_str();
+			bool freezeMaster = Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/freeze_master",
+				Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true));
 			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/debug", false);
-			dvfsPolicy = new DVFSH1Thermal(performanceCounters, numberOfCores, enabledStates, frequencies, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, debug);
+			dvfsPolicy = new DVFSH1Thermal(performanceCounters, numberOfCores, enabledStates, frequencies, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, freezeMaster, debug);
 	} else if (policyName == "PCGov") {
 		double ambientTemperature = Sim()->getCfg()->getFloat("periodic_thermal/ambient_temperature");
 		double maxTemperature = Sim()->getCfg()->getFloat("periodic_thermal/max_temperature");
@@ -424,8 +429,9 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/per_core_power_guard")
 				: 0.0;
 			string profileFile = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/profile_file").c_str();
+			bool freezeMaster = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/freeze_master", true);
 			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/debug", false);
-			migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, debug);
+			migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, freezeMaster, debug);
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
@@ -714,6 +720,25 @@ bool SchedulerOpen::isAssignedToTask(int coreId) {
  */
 bool SchedulerOpen::isAssignedToThread(int coreId) {
 	return systemCores[coreId].assignedThreadID != -1;
+}
+
+int SchedulerOpen::getAssignedThreadNum(int coreId) const {
+	if (coreId < 0 || coreId >= numberOfCores) {
+		return -1;
+	}
+
+	int threadId = systemCores[coreId].assignedThreadID;
+	if (threadId == -1 || threadId >= (int)Sim()->getThreadManager()->getNumThreads()) {
+		return -1;
+	}
+
+	Thread *thread = Sim()->getThreadManager()->getThreadFromID(threadId);
+	int threadNum = thread->getThreadNum();
+	if (threadNum < 0 && thread->getId() == (thread_id_t)thread->getAppId()) {
+		return 0;
+	}
+
+	return threadNum;
 }
 
 bool SchedulerOpen::executeMappingPolicy(int taskID, SubsecondTime time) {
@@ -1314,13 +1339,17 @@ void SchedulerOpen::initPerforationPolicy(String policyName, int taskCount)
  */
 void SchedulerOpen::executeDVFSPolicy() {
 	std::vector<int> oldFrequencies;
+	std::vector<int> taskIds;
+	std::vector<int> threadIds;
 	std::vector<bool> activeCores;
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
 		oldFrequencies.push_back(Sim()->getMagicServer()->getFrequency(coreCounter));
+		taskIds.push_back(systemCores.at(coreCounter).assignedTaskID);
+		threadIds.push_back(getAssignedThreadNum(coreCounter));
 	    static bool reserved_cores_are_active = Sim()->getCfg()->getBool("scheduler/open/dvfs/reserved_cores_are_active");
 		activeCores.push_back(reserved_cores_are_active ? isAssignedToTask(coreCounter) : isAssignedToThread(coreCounter));
 	}
-	vector<int> frequencies = dvfsPolicy->getFrequencies(oldFrequencies, activeCores);
+	vector<int> frequencies = dvfsPolicy->getFrequencies(oldFrequencies, taskIds, threadIds, activeCores);
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
 		setFrequency(coreCounter, frequencies.at(coreCounter));
 	}
@@ -1332,15 +1361,17 @@ void SchedulerOpen::executeDVFSPolicy() {
  */
 void SchedulerOpen::executeMigrationPolicy(SubsecondTime time) {
 	std::vector<int> taskIds;
+	std::vector<int> threadIds;
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
 		taskIds.push_back(systemCores.at(coreCounter).assignedTaskID);
+		threadIds.push_back(getAssignedThreadNum(coreCounter));
 	}
 	std::vector<bool> activeCores;
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
 	    static bool reserved_cores_are_active = Sim()->getCfg()->getBool("scheduler/open/dvfs/reserved_cores_are_active");
 		activeCores.push_back(reserved_cores_are_active ? isAssignedToTask(coreCounter) : isAssignedToThread(coreCounter));
 	}
-	std::vector<migration> migrations = migrationPolicy->migrate(time, taskIds, activeCores);
+	std::vector<migration> migrations = migrationPolicy->migrate(time, taskIds, threadIds, activeCores);
 
 	for (migration &migration : migrations) {
 		if (systemCores.at(migration.fromCore).assignedTaskID == -1) {

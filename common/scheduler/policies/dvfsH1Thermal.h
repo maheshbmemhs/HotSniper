@@ -18,6 +18,7 @@ public:
                   int numberOfCores,
                   const std::vector<double> &enabledStates,
                   const std::vector<int> &frequencies,
+	                  double targetIPS,
 	                  const std::string &objective,
 	                  double maxTemp,
 	                  double thermalMargin,
@@ -25,9 +26,11 @@ public:
 	                  double powerBudgetMargin,
 	                  double perCorePowerGuard,
 	                  const std::string &profileFile,
+	                  bool freezeMaster,
 	                  bool debug = false);
 
     virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies, const std::vector<bool> &activeCores);
+    virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies, const std::vector<int> &taskIds, const std::vector<int> &threadIds, const std::vector<bool> &activeCores);
 
 private:
     struct ProfileEntry {
@@ -57,6 +60,7 @@ private:
     int numberOfCores;
     std::vector<double> enabledStates;
     std::vector<int> frequencies;
+	    double targetIPS;
 	    std::string objective;
 	    double maxTemp;
 	    double thermalMargin;
@@ -64,6 +68,7 @@ private:
 	    double powerBudgetMargin;
 	    double perCorePowerGuard;
 	    std::string profileFile;
+	    bool freezeMaster;
 	    bool debug;
 	    bool warnedFallback;
 	    bool warnedInvalidPowerBudget;
@@ -79,6 +84,8 @@ private:
 	    double getMeasuredPower(unsigned int coreId) const;
 	    double getMeasuredTemperature(unsigned int coreId) const;
 	    bool isPowerBudgetObjective() const;
+	    bool isTargetIPSMinPowerObjective() const;
+	    bool isMasterCore(const std::vector<int> &taskIds, const std::vector<int> &threadIds, unsigned int coreId) const;
 	    double tempLimit() const;
 	    double effectivePowerBudget() const;
 	    void buildPrediction(unsigned int coreId,
@@ -96,14 +103,27 @@ private:
 	                                           const std::vector<std::vector<double> > &predIPS,
 	                                           const std::vector<std::vector<double> > &predPower,
 	                                           const std::vector<std::vector<double> > &predTemp) const;
+	    Candidate evaluateTargetIPSCandidate(const std::vector<int> &chosenStates,
+	                                         const std::vector<int> &currentStates,
+	                                         const std::vector<std::vector<double> > &predIPS,
+	                                         const std::vector<std::vector<double> > &predPower,
+	                                         const std::vector<std::vector<double> > &predTemp) const;
 	    bool isBetterPowerBudgetCandidate(const Candidate &candidate,
 	                                      const Candidate &best,
 	                                      bool requireFeasible) const;
+	    bool isBetterTargetIPSCandidate(const Candidate &candidate,
+	                                    const Candidate &best,
+	                                    bool requireFeasible) const;
 	    std::vector<int> selectPowerBudgetStates(const std::vector<int> &currentStates,
 	                                             const std::vector<std::vector<double> > &predIPS,
 	                                             const std::vector<std::vector<double> > &predPower,
 	                                             const std::vector<std::vector<double> > &predTemp,
 	                                             Candidate &selected) const;
+	    std::vector<int> selectTargetIPSMinPowerStates(const std::vector<int> &currentStates,
+	                                                   const std::vector<std::vector<double> > &predIPS,
+	                                                   const std::vector<std::vector<double> > &predPower,
+	                                                   const std::vector<std::vector<double> > &predTemp,
+	                                                   Candidate &selected) const;
 	    void logPrediction(unsigned int coreId,
 	                       double measuredIPS,
 	                       double currentStateValue,

@@ -13,6 +13,7 @@ state_value = 1.0,2.0,3.0,4.0
 core_state = 0,1,2,3
 target_ips = 10.0
 profile_file = /absolute/path/to/profiles.tsv
+freeze_master = true
 debug = false
 ```
 
@@ -29,6 +30,8 @@ blackscholes-simsmall-2 4.00 5.71 0.70 71.00 3.05
 ```
 
 Only benchmarks with rows for every enabled state are used for nearest-neighbor prediction. If none match, H1 falls back to measured IPS on the current state, scales IPS by frequency ratio for other states, and uses measured current power or 0 W.
+
+When `freeze_master` is true, the task-local thread 0 core is excluded from H1 active-core selection and cannot be used as a migration source, migration target, or swap partner.
 
 Optional fixed per-core frequencies:
 

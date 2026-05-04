@@ -1,0 +1,2 @@
+Run,resp_time_ns,temp_C_0,temp_C_1,temp_C_2,temp_C_3,temp_total_avg,power_C_0,power_C_1,power_C_2,power_C_3,power_total_sum,energy_C_0,energy_C_1,energy_C_2,energy_C_3,energy_total,cpi_C_0,cpi_C_1,cpi_C_2,cpi_C_3,cpi_avg_workers
+1,68501097,47.51,56.41,69.32,53.01,54.30,0.45,1.26,2.23,1.30,5.47,0.03,0.09,0.15,0.09,0.37,0.66,0.67,0.65,0.00,0.44

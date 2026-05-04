@@ -19,6 +19,7 @@ class Thread
    private:
       thread_id_t m_thread_id;
       app_id_t m_app_id;
+      int m_thread_num;
       String m_name;
 
       ConditionVariable m_cond;
@@ -32,7 +33,7 @@ class Thread
       UInt64 m_va2pa_arg;
 
    public:
-      Thread(thread_id_t thread_id, app_id_t app_id, String app_name="X");
+      Thread(thread_id_t thread_id, app_id_t app_id, String app_name="X", int thread_num=-1);
       ~Thread();
 
       struct {
@@ -43,6 +44,7 @@ class Thread
 
       thread_id_t getId() const { return m_thread_id; }
       app_id_t getAppId() const { return m_app_id; }
+      int getThreadNum() const { return m_thread_num; }
 
       String getName() const { return m_name; }
       void setName(String name) { m_name = name; }

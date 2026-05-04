@@ -62,7 +62,7 @@ std::unordered_map<float,NeighborPrediction::core_status> NeighborPrediction::ge
             min = diff;
         }
     }
-    std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
+    // std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
     return benchmarks[nearest_benchmark];
 }
 

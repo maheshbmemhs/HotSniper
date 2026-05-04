@@ -418,9 +418,9 @@ def main():
     # example_asymmetric_perforation()
     # example_pcgov()
     # ondemand_demo()
-    coldestcore_demo()
+    # coldestcore_demo()
     # combined_demo()
-    # fixedfreqmigration_demo()
+    fixedfreqmigration_demo()
     # ondemand_multiprogram_demo()
     
 if __name__ == '__main__':

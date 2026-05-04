@@ -1,6 +1,7 @@
 #include "migrationSota.h"
 #include <iomanip>
 #include <unordered_map>
+#include "neighbor_prediction.h"
 using namespace std;
 
 migrationSota::migrationSota(
@@ -52,11 +53,14 @@ std::vector<migration> migrationSota::migrate(
     int tot_threads = 0;
     std::unordered_map<int, int> threads_core;
     std::unordered_map<int, int> newthreads_core;
+    std::unordered_map<int, int> newcore_ips;
+
     int temp;
+    NeighborPrediction  pred("profile.txt");
 
     for (int c = 0; c < coreRows * coreColumns; c++) {
         availableCores.at(c) = taskIds.at(c) == -1;
-        
+        // newthreads_core[c] = -1;
         if(taskIds.at(c) != -1) {
             threads_core[c] = c; //taskIds.at(c)
             newthreads_core[c] = -1;
@@ -93,7 +97,9 @@ std::vector<migration> migrationSota::migrate(
         std::unordered_map<int, int> threads_power;
         for (auto& pair : newthreads_core){
             if(newthreads_core[pair.first] == -1) {
-                threads_power[pair.first] = (rand() % 100 + 1);//performanceCounters->getPowerOfCore(coreId);
+                auto IPS = performanceCounters->getIPSOfCore(threads_core[pair.first]);
+                auto near = pred.getNearestBenchmark(c+1,IPS);
+                threads_power[pair.first] =near[c].power ;//(rand() % 100 + 1);//performanceCounters->getPowerOfCore(coreId);
             } else {
                 threads_power[pair.first]  = -1;
             }
@@ -112,8 +118,15 @@ std::vector<migration> migrationSota::migrate(
         if(maxVal != -1) {
             newthreads_core[thread_idx] = c;
             cout << "[DEBUG] Core " << c << " assigned thread " << thread_idx << " with power " << maxVal << endl;
+            auto IPS = performanceCounters->getIPSOfCore(threads_core[thread_idx]);
+            auto near = pred.getNearestBenchmark(c+1,IPS);
+            newcore_ips[c] = near[c].ips;
+            // cout << "[DEBUG] Core " << c << " predicted IPS after migration: " << newcore_ips[c] << endl;
         }
     }
+
+
+    
 
     for (auto& pair : newthreads_core) {
        

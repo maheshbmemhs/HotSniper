@@ -29,3 +29,15 @@ streamcluster-simsmall-1	3.50	6.51	0.54	153.22	8.44
 streamcluster-simsmall-1	4.00	7.47	0.54	187.78	11.01
 streamcluster-simsmall-3	1.00	1.51	0.66	54.96	1.05
 streamcluster-simsmall-3	1.50	2.25	0.67	63.46	1.72
+streamcluster-simsmall-3	2.00	2.95	0.68	74.61	2.57
+streamcluster-simsmall-3	2.50	3.62	0.69	88.73	3.62
+streamcluster-simsmall-3	3.00	4.29	0.70	106.32	4.93
+streamcluster-simsmall-3	3.50	4.95	0.71	127.22	6.48
+streamcluster-simsmall-3	4.00	5.60	0.72	152.40	8.33
+streamcluster-simsmall-2	1.00	1.62	0.62	55.69	1.11
+streamcluster-simsmall-2	1.50	2.42	0.62	64.90	1.83
+streamcluster-simsmall-2	2.00	3.21	0.63	77.12	2.77
+streamcluster-simsmall-2	2.50	3.95	0.64	92.50	3.94
+streamcluster-simsmall-2	3.00	4.69	0.67	111.84	5.37
+streamcluster-simsmall-2	3.50	5.45	0.65	135.33	7.13
+streamcluster-simsmall-2	4.00	6.17	0.66	163.37	9.17

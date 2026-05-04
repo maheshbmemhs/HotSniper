@@ -304,18 +304,40 @@ def example_pcgov():
                 run(['{:.1f}GHz'.format(freq), 'PCGov', 'slowDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
 
 def ondemand_demo():
-    run(['{:.1f}GHz'.format(4), 'ondemand', 'fastDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+    run(['{:.1f}GHz'.format(4), 'ondemand', 'fastDVFS'], get_instance('parsec-streamcluster', 3, input_set='simsmall'))
 
 def coldestcore_demo():
-    run(['{:.1f}GHz'.format(4), 'maxFreq', 'slowDVFS', 'coldestCore'],
-        get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+    run(['{:.1f}GHz'.format(4), 'fixedFreq', 'slowDVFS', 'coldestCore'],
+        get_instance('parsec-streamcluster', 3, input_set='simsmall'))
 
 def combined_demo():
     # This will use coldestCore + ondemand together
     run(['{:.1f}GHz'.format(4), 'coldestCore', 'ondemand', 'fastDVFS'], 
-        get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+        get_instance('parsec-streamcluster', 3, input_set='simsmall'))
 
-def fixedfreq_demo():
+def ondemand_multiprogram_demo():
+    input_set = 'simsmall'
+    base_configuration = ['{:.1f}GHz'.format(4), 'ondemand', 'fastDVFS']
+    benchmark_set = (
+        'parsec-blackscholes',
+        'parsec-blackscholes',
+    )
+
+    if ENABLE_HEARTBEATS == True:
+        base_configuration.append('hb_enabled')
+
+    benchmarks = ''
+    for i, benchmark in enumerate(benchmark_set):
+        min_parallelism = get_feasible_parallelisms(benchmark)[0]
+        if i != 0:
+            benchmarks = benchmarks + ',' + get_instance(benchmark, min_parallelism, input_set)
+        else:
+            benchmarks = benchmarks + get_instance(benchmark, min_parallelism, input_set)
+
+    run(base_configuration, benchmarks)
+
+
+def fixedfreqmigration_demo():
     run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 def example_symmetric_perforation():
@@ -396,9 +418,10 @@ def main():
     # example_asymmetric_perforation()
     # example_pcgov()
     # ondemand_demo()
-    # coldestcore_demo()
+    coldestcore_demo()
     # combined_demo()
-    fixedfreq_demo()
+    # fixedfreqmigration_demo()
+    # ondemand_multiprogram_demo()
     
 if __name__ == '__main__':
     main()

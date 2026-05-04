@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -16,6 +17,12 @@ MigrationH1::MigrationH1(const PerformanceCounters *performanceCounters,
                          const vector<int> &coreToState,
                          const vector<double> &enabledStates,
                          double targetIPS,
+                         const string &objective,
+                         double maxTemp,
+                         double thermalMargin,
+                         double powerBudget,
+                         double powerBudgetMargin,
+                         double perCorePowerGuard,
                          const string &profileFile,
                          bool debug)
     : performanceCounters(performanceCounters)
@@ -23,9 +30,16 @@ MigrationH1::MigrationH1(const PerformanceCounters *performanceCounters,
     , coreToState(coreToState)
     , enabledStates(enabledStates)
     , targetIPS(targetIPS)
+    , objective(objective)
+    , maxTemp(maxTemp)
+    , thermalMargin(thermalMargin)
+    , powerBudget(powerBudget)
+    , powerBudgetMargin(powerBudgetMargin)
+    , perCorePowerGuard(perCorePowerGuard)
     , profileFile(profileFile)
     , debug(debug)
     , warnedFallback(false)
+    , warnedInvalidPowerBudget(false)
 {
     if ((int)this->coreToState.size() < numberOfCores) {
         cout << "[MigrationH1][Warning]: core_state has fewer entries than cores; missing cores will be ignored." << endl;
@@ -46,6 +60,16 @@ MigrationH1::MigrationH1(const PerformanceCounters *performanceCounters,
     }
 
     loadProfile();
+}
+
+MigrationH1::ThermalCandidate::ThermalCandidate()
+    : totalIPS(0.0)
+    , totalPower(0.0)
+    , maxPredTemp(0.0)
+    , movedItems(0)
+    , feasible(false)
+    , valid(false)
+{
 }
 
 int MigrationH1::stateKey(double state) const
@@ -225,12 +249,56 @@ double MigrationH1::getMeasuredPower(unsigned int coreId) const
     return 0.0;
 }
 
+double MigrationH1::getMeasuredTemperature(unsigned int coreId) const
+{
+    if (performanceCounters == NULL) {
+        return 0.0;
+    }
+
+    try {
+        double temperature = performanceCounters->getTemperatureOfCore(coreId);
+        if (temperature > 0.0) {
+            return temperature;
+        }
+    } catch (...) {
+    }
+
+    return 0.0;
+}
+
+bool MigrationH1::isThermalObjective() const
+{
+    return objective == "thermal_max_ips";
+}
+
+bool MigrationH1::isPowerBudgetObjective() const
+{
+    return objective == "power_budget_max_ips";
+}
+
+bool MigrationH1::isTargetIPSObjective() const
+{
+    return !isThermalObjective() && !isPowerBudgetObjective();
+}
+
+double MigrationH1::tempLimit() const
+{
+    return maxTemp - thermalMargin;
+}
+
+double MigrationH1::effectivePowerBudget() const
+{
+    return powerBudget * powerBudgetMargin;
+}
+
 void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
                                    vector<vector<double> > &predIPS,
-                                   vector<vector<double> > &predPower)
+                                   vector<vector<double> > &predPower,
+                                   vector<vector<double> > &predTemp)
 {
     predIPS.assign(activeCoreIds.size(), vector<double>(enabledStates.size(), 0.0));
     predPower.assign(activeCoreIds.size(), vector<double>(enabledStates.size(), 0.0));
+    predTemp.assign(activeCoreIds.size(), vector<double>(enabledStates.size(), 0.0));
 
     for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
         unsigned int coreId = activeCoreIds.at(item);
@@ -238,11 +306,12 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
         double currentStateValue = enabledStates.at(currentStateIndex);
         double measuredIPS = getMeasuredIPSBillions(coreId, currentStateValue);
         double measuredPower = getMeasuredPower(coreId);
+        double measuredTemp = getMeasuredTemperature(coreId);
 
         string nearestBenchmark = findNearestBenchmark(currentStateValue, measuredIPS);
         if (nearestBenchmark == "") {
             if (!warnedFallback) {
-                cout << "[MigrationH1][Warning]: no valid nearest benchmark with all enabled states found; using measured fallback predictions." << endl;
+                cout << "[MigrationH1][Warning]: no valid nearest benchmark with all enabled states found; using conservative measured fallback predictions." << endl;
                 warnedFallback = true;
             }
 
@@ -250,6 +319,11 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
                 double ratio = currentStateValue > 0.0 ? enabledStates.at(state) / currentStateValue : 1.0;
                 predIPS.at(item).at(state) = measuredIPS * ratio;
                 predPower.at(item).at(state) = measuredPower;
+                if ((int)state <= currentStateIndex) {
+                    predTemp.at(item).at(state) = measuredTemp > 0.0 ? measuredTemp : tempLimit();
+                } else {
+                    predTemp.at(item).at(state) = tempLimit() + 10.0 * ((int)state - currentStateIndex);
+                }
             }
         } else {
             ProfileMap::const_iterator benchmark = profile.find(nearestBenchmark);
@@ -258,15 +332,17 @@ void MigrationH1::buildPredictions(const vector<unsigned int> &activeCoreIds,
                 if (entry == benchmark->second.end()) {
                     predIPS.at(item).at(state) = measuredIPS;
                     predPower.at(item).at(state) = measuredPower;
+                    predTemp.at(item).at(state) = measuredTemp > 0.0 ? measuredTemp : tempLimit();
                 } else {
                     predIPS.at(item).at(state) = entry->second.ips;
                     predPower.at(item).at(state) = entry->second.power;
+                    predTemp.at(item).at(state) = entry->second.temp;
                 }
             }
         }
 
         if (debug) {
-            logPrediction(coreId, measuredIPS, currentStateValue, nearestBenchmark, predIPS.at(item), predPower.at(item));
+            logPrediction(coreId, measuredIPS, currentStateValue, nearestBenchmark, predIPS.at(item), predPower.at(item), predTemp.at(item));
         }
     }
 }
@@ -399,103 +475,459 @@ vector<int> MigrationH1::runH1(const vector<unsigned int> &activeCoreIds,
     return desiredState;
 }
 
+vector<int> MigrationH1::getAvailableFixedCores(const vector<unsigned int> &activeCoreIds,
+                                                const vector<int> &taskIds) const
+{
+    vector<int> availableCores;
+    for (int core = 0; core < numberOfCores; core++) {
+        if (getStateForCore(core) < 0) {
+            continue;
+        }
+
+        bool isActiveItemCore = find(activeCoreIds.begin(), activeCoreIds.end(), (unsigned int)core) != activeCoreIds.end();
+        bool isUnassigned = core >= (int)taskIds.size() || taskIds.at(core) == -1;
+        if (isActiveItemCore || isUnassigned) {
+            availableCores.push_back(core);
+        }
+    }
+
+    return availableCores;
+}
+
+MigrationH1::ThermalCandidate MigrationH1::evaluateThermalCandidate(const vector<unsigned int> &activeCoreIds,
+                                                                    const vector<int> &desiredCore,
+                                                                    const vector<vector<double> > &predIPS,
+                                                                    const vector<vector<double> > &predPower,
+                                                                    const vector<vector<double> > &predTemp) const
+{
+    ThermalCandidate candidate;
+    candidate.desiredCore = desiredCore;
+    candidate.valid = desiredCore.size() == activeCoreIds.size();
+    candidate.feasible = true;
+    candidate.maxPredTemp = -numeric_limits<double>::max();
+
+    if (!candidate.valid) {
+        candidate.feasible = false;
+        return candidate;
+    }
+
+    for (unsigned int item = 0; item < desiredCore.size(); item++) {
+        int state = getStateForCore(desiredCore.at(item));
+        if (state < 0) {
+            candidate.valid = false;
+            candidate.feasible = false;
+            return candidate;
+        }
+
+        double itemTemp = predTemp.at(item).at(state);
+        candidate.totalIPS += predIPS.at(item).at(state);
+        candidate.totalPower += predPower.at(item).at(state);
+        candidate.maxPredTemp = max(candidate.maxPredTemp, itemTemp);
+        if (itemTemp > tempLimit()) {
+            candidate.feasible = false;
+        }
+        if ((int)activeCoreIds.at(item) != desiredCore.at(item)) {
+            candidate.movedItems++;
+        }
+    }
+
+    if (desiredCore.size() == 0) {
+        candidate.maxPredTemp = 0.0;
+    }
+
+    return candidate;
+}
+
+MigrationH1::ThermalCandidate MigrationH1::evaluatePowerBudgetCandidate(const vector<unsigned int> &activeCoreIds,
+                                                                        const vector<int> &desiredCore,
+                                                                        const vector<vector<double> > &predIPS,
+                                                                        const vector<vector<double> > &predPower,
+                                                                        const vector<vector<double> > &predTemp) const
+{
+    ThermalCandidate candidate;
+    candidate.desiredCore = desiredCore;
+    candidate.valid = desiredCore.size() == activeCoreIds.size();
+    candidate.feasible = true;
+    candidate.maxPredTemp = -numeric_limits<double>::max();
+
+    if (!candidate.valid) {
+        candidate.feasible = false;
+        return candidate;
+    }
+
+    for (unsigned int item = 0; item < desiredCore.size(); item++) {
+        int state = getStateForCore(desiredCore.at(item));
+        if (state < 0) {
+            candidate.valid = false;
+            candidate.feasible = false;
+            return candidate;
+        }
+
+        double itemPower = predPower.at(item).at(state);
+        candidate.totalIPS += predIPS.at(item).at(state);
+        candidate.totalPower += itemPower;
+        candidate.maxPredTemp = max(candidate.maxPredTemp, predTemp.at(item).at(state));
+        if (perCorePowerGuard > 0.0 && itemPower > perCorePowerGuard) {
+            candidate.feasible = false;
+        }
+        if ((int)activeCoreIds.at(item) != desiredCore.at(item)) {
+            candidate.movedItems++;
+        }
+    }
+
+    if (desiredCore.size() == 0) {
+        candidate.maxPredTemp = 0.0;
+    }
+
+    if (candidate.totalPower > effectivePowerBudget() + 1e-9) {
+        candidate.feasible = false;
+    }
+
+    return candidate;
+}
+
+bool MigrationH1::isBetterThermalCandidate(const ThermalCandidate &candidate,
+                                           const ThermalCandidate &best,
+                                           bool requireFeasible) const
+{
+    const double eps = 1e-9;
+    if (!candidate.valid) {
+        return false;
+    }
+    if (requireFeasible && !candidate.feasible) {
+        return false;
+    }
+    if (!best.valid) {
+        return true;
+    }
+
+    if (requireFeasible) {
+        if (candidate.totalIPS > best.totalIPS + eps) {
+            return true;
+        }
+        if (candidate.totalIPS < best.totalIPS - eps) {
+            return false;
+        }
+        if (candidate.totalPower < best.totalPower - eps) {
+            return true;
+        }
+        if (candidate.totalPower > best.totalPower + eps) {
+            return false;
+        }
+        if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+            return true;
+        }
+        if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+            return false;
+        }
+        return candidate.movedItems < best.movedItems;
+    }
+
+    if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+        return true;
+    }
+    if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+        return false;
+    }
+    if (candidate.totalPower < best.totalPower - eps) {
+        return true;
+    }
+    if (candidate.totalPower > best.totalPower + eps) {
+        return false;
+    }
+    if (candidate.totalIPS > best.totalIPS + eps) {
+        return true;
+    }
+    if (candidate.totalIPS < best.totalIPS - eps) {
+        return false;
+    }
+    return candidate.movedItems < best.movedItems;
+}
+
+bool MigrationH1::isBetterPowerBudgetCandidate(const ThermalCandidate &candidate,
+                                               const ThermalCandidate &best,
+                                               bool requireFeasible) const
+{
+    const double eps = 1e-9;
+    if (!candidate.valid) {
+        return false;
+    }
+    if (requireFeasible && !candidate.feasible) {
+        return false;
+    }
+    if (!best.valid) {
+        return true;
+    }
+
+    if (requireFeasible) {
+        if (candidate.totalIPS > best.totalIPS + eps) {
+            return true;
+        }
+        if (candidate.totalIPS < best.totalIPS - eps) {
+            return false;
+        }
+        if (candidate.totalPower < best.totalPower - eps) {
+            return true;
+        }
+        if (candidate.totalPower > best.totalPower + eps) {
+            return false;
+        }
+        if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+            return true;
+        }
+        if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+            return false;
+        }
+        return candidate.movedItems < best.movedItems;
+    }
+
+    if (candidate.totalPower < best.totalPower - eps) {
+        return true;
+    }
+    if (candidate.totalPower > best.totalPower + eps) {
+        return false;
+    }
+    if (candidate.maxPredTemp < best.maxPredTemp - eps) {
+        return true;
+    }
+    if (candidate.maxPredTemp > best.maxPredTemp + eps) {
+        return false;
+    }
+    if (candidate.totalIPS > best.totalIPS + eps) {
+        return true;
+    }
+    if (candidate.totalIPS < best.totalIPS - eps) {
+        return false;
+    }
+    return candidate.movedItems < best.movedItems;
+}
+
+vector<int> MigrationH1::runThermalMaxIPS(const vector<unsigned int> &activeCoreIds,
+                                          const vector<int> &taskIds,
+                                          const vector<vector<double> > &predIPS,
+                                          const vector<vector<double> > &predPower,
+                                          const vector<vector<double> > &predTemp,
+                                          ThermalCandidate &selected) const
+{
+    vector<int> availableCores = getAvailableFixedCores(activeCoreIds, taskIds);
+    ThermalCandidate bestFeasible;
+    ThermalCandidate safest;
+
+    if (availableCores.size() < activeCoreIds.size()) {
+        cout << "[MigrationH1][Warning]: active item count exceeds available fixed-core slots; keeping current mapping." << endl;
+        vector<int> currentCore(activeCoreIds.begin(), activeCoreIds.end());
+        selected = evaluateThermalCandidate(activeCoreIds, currentCore, predIPS, predPower, predTemp);
+        return currentCore;
+    }
+
+    vector<int> desiredCore(activeCoreIds.size(), -1);
+    vector<bool> used(availableCores.size(), false);
+
+    function<void(unsigned int)> enumerate = [&](unsigned int item) {
+        if (item == activeCoreIds.size()) {
+            ThermalCandidate candidate = evaluateThermalCandidate(activeCoreIds, desiredCore, predIPS, predPower, predTemp);
+            if (isBetterThermalCandidate(candidate, bestFeasible, true)) {
+                bestFeasible = candidate;
+            }
+            if (isBetterThermalCandidate(candidate, safest, false)) {
+                safest = candidate;
+            }
+            return;
+        }
+
+        for (unsigned int slot = 0; slot < availableCores.size(); slot++) {
+            if (used.at(slot)) {
+                continue;
+            }
+            used.at(slot) = true;
+            desiredCore.at(item) = availableCores.at(slot);
+            enumerate(item + 1);
+            desiredCore.at(item) = -1;
+            used.at(slot) = false;
+        }
+    };
+
+    enumerate(0);
+
+    if (bestFeasible.valid) {
+        selected = bestFeasible;
+    } else {
+        selected = safest;
+    }
+
+    return selected.desiredCore;
+}
+
+vector<int> MigrationH1::runPowerBudgetMaxIPS(const vector<unsigned int> &activeCoreIds,
+                                              const vector<int> &taskIds,
+                                              const vector<vector<double> > &predIPS,
+                                              const vector<vector<double> > &predPower,
+                                              const vector<vector<double> > &predTemp,
+                                              ThermalCandidate &selected) const
+{
+    vector<int> availableCores = getAvailableFixedCores(activeCoreIds, taskIds);
+    ThermalCandidate bestFeasible;
+    ThermalCandidate safest;
+
+    if (availableCores.size() < activeCoreIds.size()) {
+        cout << "[MigrationH1][Warning]: active item count exceeds available fixed-core slots; keeping current mapping." << endl;
+        vector<int> currentCore(activeCoreIds.begin(), activeCoreIds.end());
+        selected = evaluatePowerBudgetCandidate(activeCoreIds, currentCore, predIPS, predPower, predTemp);
+        return currentCore;
+    }
+
+    vector<int> desiredCore(activeCoreIds.size(), -1);
+    vector<bool> used(availableCores.size(), false);
+
+    function<void(unsigned int)> enumerate = [&](unsigned int item) {
+        if (item == activeCoreIds.size()) {
+            ThermalCandidate candidate = evaluatePowerBudgetCandidate(activeCoreIds, desiredCore, predIPS, predPower, predTemp);
+            if (isBetterPowerBudgetCandidate(candidate, bestFeasible, true)) {
+                bestFeasible = candidate;
+            }
+            if (isBetterPowerBudgetCandidate(candidate, safest, false)) {
+                safest = candidate;
+            }
+            return;
+        }
+
+        for (unsigned int slot = 0; slot < availableCores.size(); slot++) {
+            if (used.at(slot)) {
+                continue;
+            }
+            used.at(slot) = true;
+            desiredCore.at(item) = availableCores.at(slot);
+            enumerate(item + 1);
+            desiredCore.at(item) = -1;
+            used.at(slot) = false;
+        }
+    };
+
+    enumerate(0);
+
+    if (bestFeasible.valid) {
+        selected = bestFeasible;
+    } else {
+        selected = safest;
+    }
+
+    return selected.desiredCore;
+}
+
 vector<migration> MigrationH1::convertDesiredStatesToMigrations(const vector<unsigned int> &activeCoreIds,
                                                                  const vector<int> &desiredState,
-                                                                 const vector<bool> &activeCores) const
+                                                                 const vector<int> &taskIds) const
 {
-    vector<migration> migrations;
-    vector<bool> handled(activeCoreIds.size(), false);
+    vector<int> desiredCore(activeCoreIds.size(), -1);
+    vector<bool> reserved(numberOfCores, false);
 
-    vector<bool> coreOccupied(numberOfCores, false);
-    for (int core = 0; core < numberOfCores && core < (int)activeCores.size(); core++) {
-        coreOccupied.at(core) = activeCores.at(core);
+    // Keep already-correct items in place first. This preserves the old H1
+    // behavior when the target state is already occupied by the same item.
+    for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
+        int core = activeCoreIds.at(item);
+        if (getStateForCore(core) == desiredState.at(item)) {
+            desiredCore.at(item) = core;
+            reserved.at(core) = true;
+        }
     }
 
     for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
-        if (handled.at(item)) {
+        if (desiredCore.at(item) != -1) {
             continue;
         }
 
-        unsigned int fromCore = activeCoreIds.at(item);
-        int currentState = getStateForCore(fromCore);
         int wantedState = desiredState.at(item);
-        if (currentState == wantedState) {
-            handled.at(item) = true;
-            continue;
-        }
-
-        for (unsigned int other = item + 1; other < activeCoreIds.size(); other++) {
-            if (handled.at(other)) {
-                continue;
-            }
-
-            unsigned int toCore = activeCoreIds.at(other);
-            int otherCurrentState = getStateForCore(toCore);
-            int otherWantedState = desiredState.at(other);
-            if (otherCurrentState == wantedState && otherWantedState == currentState) {
-                migration move;
-                move.fromCore = fromCore;
-                move.toCore = toCore;
-                move.swap = true;
-                migrations.push_back(move);
-
-                cout << "[MigrationH1] swap core " << fromCore << " state " << enabledStates.at(currentState)
-                     << " <-> core " << toCore << " state " << enabledStates.at(otherCurrentState) << endl;
-
-                handled.at(item) = true;
-                handled.at(other) = true;
-                break;
-            }
-        }
-    }
-
-    bool progress = true;
-    while (progress) {
-        progress = false;
-        for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
-            if (handled.at(item)) {
-                continue;
-            }
-
-            unsigned int fromCore = activeCoreIds.at(item);
-            int currentState = getStateForCore(fromCore);
-            int wantedState = desiredState.at(item);
-            if (currentState == wantedState) {
-                handled.at(item) = true;
-                progress = true;
-                continue;
-            }
-
-            for (int targetCore = 0; targetCore < numberOfCores; targetCore++) {
-                if (getStateForCore(targetCore) != wantedState || coreOccupied.at(targetCore)) {
+        for (int pass = 0; pass < 3 && desiredCore.at(item) == -1; pass++) {
+            for (int core = 0; core < numberOfCores; core++) {
+                if (reserved.at(core) || getStateForCore(core) != wantedState) {
                     continue;
                 }
 
-                migration move;
-                move.fromCore = fromCore;
-                move.toCore = targetCore;
-                move.swap = false;
-                migrations.push_back(move);
+                bool isIdle = core >= (int)taskIds.size() || taskIds.at(core) == -1;
+                bool isActiveItemCore = find(activeCoreIds.begin(), activeCoreIds.end(), (unsigned int)core) != activeCoreIds.end();
+                if ((pass == 0 && !isIdle) || (pass == 1 && !isActiveItemCore)) {
+                    continue;
+                }
 
-                cout << "[MigrationH1] move core " << fromCore << " state " << enabledStates.at(currentState)
-                     << " -> idle core " << targetCore << " state " << enabledStates.at(wantedState) << endl;
-
-                coreOccupied.at(fromCore) = false;
-                coreOccupied.at(targetCore) = true;
-                handled.at(item) = true;
-                progress = true;
+                desiredCore.at(item) = core;
+                reserved.at(core) = true;
                 break;
+            }
+        }
+
+        if (desiredCore.at(item) == -1) {
+            desiredCore.at(item) = activeCoreIds.at(item);
+            if (debug) {
+                cout << "[MigrationH1][debug]: no core found for desired state "
+                     << desiredState.at(item) << "; keeping core " << activeCoreIds.at(item) << endl;
             }
         }
     }
 
-    if (debug) {
-        for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
-            if (!handled.at(item)) {
-                unsigned int core = activeCoreIds.at(item);
-                cout << "[MigrationH1][debug]: skipped non-reciprocal migration from core " << core
-                     << " state " << enabledStates.at(getStateForCore(core))
-                     << " to state " << enabledStates.at(desiredState.at(item)) << endl;
+    return convertDesiredCoresToMigrations(activeCoreIds, desiredCore, taskIds);
+}
+
+vector<migration> MigrationH1::convertDesiredCoresToMigrations(const vector<unsigned int> &activeCoreIds,
+                                                               const vector<int> &desiredCore,
+                                                               const vector<int> &taskIds) const
+{
+    vector<migration> migrations;
+    vector<int> itemAtCore(numberOfCores, -1);
+    vector<int> coreOfItem(activeCoreIds.begin(), activeCoreIds.end());
+    vector<bool> occupied(numberOfCores, false);
+
+    for (int core = 0; core < numberOfCores; core++) {
+        occupied.at(core) = core < (int)taskIds.size() && taskIds.at(core) != -1;
+    }
+    for (unsigned int item = 0; item < activeCoreIds.size(); item++) {
+        if (activeCoreIds.at(item) < (unsigned int)numberOfCores) {
+            itemAtCore.at(activeCoreIds.at(item)) = item;
+            occupied.at(activeCoreIds.at(item)) = true;
+        }
+    }
+
+    for (unsigned int item = 0; item < desiredCore.size(); item++) {
+        while (coreOfItem.at(item) != desiredCore.at(item)) {
+            int fromCore = coreOfItem.at(item);
+            int toCore = desiredCore.at(item);
+            if (toCore < 0 || toCore >= numberOfCores) {
+                cout << "[MigrationH1][Warning]: invalid desired core " << toCore << "; skipping migration for item " << item << endl;
+                break;
+            }
+
+            int blockingItem = itemAtCore.at(toCore);
+            migration move;
+            move.fromCore = fromCore;
+            move.toCore = toCore;
+            move.swap = blockingItem != -1;
+
+            if (move.swap) {
+                migrations.push_back(move);
+
+                cout << "[MigrationH1] swap core " << fromCore << " state " << enabledStates.at(getStateForCore(fromCore))
+                     << " <-> core " << toCore << " state " << enabledStates.at(getStateForCore(toCore)) << endl;
+
+                itemAtCore.at(toCore) = item;
+                itemAtCore.at(fromCore) = blockingItem;
+                coreOfItem.at(item) = toCore;
+                coreOfItem.at(blockingItem) = fromCore;
+            } else {
+                if (occupied.at(toCore)) {
+                    cout << "[MigrationH1][Warning]: desired core " << toCore
+                         << " is occupied by an inactive task; skipping migration for item " << item << endl;
+                    break;
+                }
+
+                migrations.push_back(move);
+
+                cout << "[MigrationH1] move core " << fromCore << " state " << enabledStates.at(getStateForCore(fromCore))
+                     << " -> idle core " << toCore << " state " << enabledStates.at(getStateForCore(toCore)) << endl;
+
+                itemAtCore.at(fromCore) = -1;
+                itemAtCore.at(toCore) = item;
+                occupied.at(fromCore) = false;
+                occupied.at(toCore) = true;
+                coreOfItem.at(item) = toCore;
             }
         }
     }
@@ -531,7 +963,8 @@ void MigrationH1::logPrediction(unsigned int coreId,
                                 double currentStateValue,
                                 const string &benchmarkName,
                                 const vector<double> &ips,
-                                const vector<double> &power) const
+                                const vector<double> &power,
+                                const vector<double> &temp) const
 {
     cout << "[MigrationH1][debug] core=" << coreId
          << " measuredIPS=" << fixed << setprecision(4) << measuredIPS
@@ -551,32 +984,190 @@ void MigrationH1::logPrediction(unsigned int coreId,
         }
         cout << fixed << setprecision(4) << power.at(state);
     }
+    cout << "] predTemp=[";
+    for (unsigned int state = 0; state < temp.size(); state++) {
+        if (state > 0) {
+            cout << ",";
+        }
+        cout << fixed << setprecision(4) << temp.at(state);
+    }
     cout << "]" << endl;
 }
 
 vector<migration> MigrationH1::migrate(SubsecondTime time, const vector<int> &taskIds, const vector<bool> &activeCores)
 {
+    vector<migration> empty;
+
     vector<unsigned int> activeCoreIds = getActiveCoreIds(taskIds, activeCores);
     if (activeCoreIds.size() == 0 || enabledStates.size() == 0) {
-        vector<migration> empty;
+        return empty;
+    }
+
+    if (isTargetIPSObjective() && activeCoreIds.size() < 2) {
+        if (debug) {
+            cout << "[MigrationH1][debug] skip migration at " << time.getNS()
+                 << " ns because active cores < 2" << endl;
+        }
+        return empty;
+    }
+
+    vector<unsigned int> filteredActiveCoreIds;
+    const double MIN_ACTIVE_IPS = 0.05; // 0.05 billion IPS = 50 MIPS
+
+    for (unsigned int i = 0; i < activeCoreIds.size(); i++) {
+        unsigned int core = activeCoreIds.at(i);
+        int stateIndex = getStateForCore(core);
+
+        if (stateIndex < 0) {
+            continue;
+        }
+
+        double currentStateValue = enabledStates.at(stateIndex);
+        double measuredIPS = getMeasuredIPSBillions(core, currentStateValue);
+
+        if (isTargetIPSObjective() && measuredIPS <= MIN_ACTIVE_IPS) {
+            if (debug) {
+                cout << "[MigrationH1][debug] skip core " << core
+                     << " because measuredIPS=" << fixed << setprecision(4)
+                     << measuredIPS << endl;
+            }
+            continue;
+        }
+
+        filteredActiveCoreIds.push_back(core);
+    }
+
+    activeCoreIds = filteredActiveCoreIds;
+
+    if (activeCoreIds.size() == 0 || (isTargetIPSObjective() && activeCoreIds.size() < 2)) {
+        if (debug) {
+            cout << "[MigrationH1][debug] skip migration at " << time.getNS()
+                 << " ns after filtering inactive cores" << endl;
+        }
         return empty;
     }
 
     vector<vector<double> > predIPS;
     vector<vector<double> > predPower;
-    buildPredictions(activeCoreIds, predIPS, predPower);
+    vector<vector<double> > predTemp;
+    buildPredictions(activeCoreIds, predIPS, predPower, predTemp);
 
     double totalPredIPSBefore = predictedCurrentIPS(activeCoreIds, predIPS);
+
+	    if (isThermalObjective()) {
+	        ThermalCandidate selected;
+	        vector<int> desiredCore = runThermalMaxIPS(activeCoreIds, taskIds, predIPS, predPower, predTemp, selected);
+	        vector<migration> migrations = convertDesiredCoresToMigrations(activeCoreIds, desiredCore, taskIds);
+
+        cout << "[MigrationH1] objective=thermal_max_ips"
+             << " time=" << time.getNS()
+             << " active=" << activeCoreIds.size()
+             << " currentTotalPredIPS=" << fixed << setprecision(4) << totalPredIPSBefore
+             << " selectedTotalPredIPS=" << fixed << setprecision(4) << selected.totalIPS
+             << " selectedTotalPredPower=" << fixed << setprecision(4) << selected.totalPower
+             << " selectedMaxPredTemp=" << fixed << setprecision(4) << selected.maxPredTemp
+             << " max_temp=" << fixed << setprecision(4) << maxTemp
+             << " thermal_margin=" << fixed << setprecision(4) << thermalMargin
+             << " feasible=" << (selected.feasible ? "true" : "false")
+             << " migrations=" << migrations.size()
+             << endl;
+	
+	        return migrations;
+	    }
+
+	    if (isPowerBudgetObjective()) {
+	        vector<int> currentCore(activeCoreIds.begin(), activeCoreIds.end());
+	        ThermalCandidate current = evaluatePowerBudgetCandidate(activeCoreIds, currentCore, predIPS, predPower, predTemp);
+
+	        if (powerBudget <= 0.0) {
+	            if (!warnedInvalidPowerBudget) {
+	                cout << "[MigrationH1][Warning]: objective=power_budget_max_ips but power_budget="
+	                     << fixed << setprecision(4) << powerBudget
+	                     << "; H1 fixed-VF migration optimization is disabled for this epoch." << endl;
+	                warnedInvalidPowerBudget = true;
+	            }
+
+	            cout << "[MigrationH1] objective=power_budget_max_ips"
+	                 << " time=" << time.getNS()
+	                 << " active=" << activeCoreIds.size()
+	                 << " power_budget=" << fixed << setprecision(4) << powerBudget
+	                 << " power_budget_margin=" << fixed << setprecision(4) << powerBudgetMargin
+	                 << " effective_power_budget=" << fixed << setprecision(4) << effectivePowerBudget()
+	                 << " per_core_power_guard=" << fixed << setprecision(4) << perCorePowerGuard
+	                 << " max_temp=" << fixed << setprecision(4) << maxTemp
+	                 << " currentTotalPredIPS=" << fixed << setprecision(4) << current.totalIPS
+	                 << " selectedTotalPredIPS=" << fixed << setprecision(4) << current.totalIPS
+	                 << " currentTotalPredPower=" << fixed << setprecision(4) << current.totalPower
+	                 << " selectedTotalPredPower=" << fixed << setprecision(4) << current.totalPower
+	                 << " selectedMaxProfileTemp=" << fixed << setprecision(4) << current.maxPredTemp
+	                 << " feasible=false"
+	                 << " migrations=0"
+	                 << " reason=invalid_power_budget"
+	                 << endl;
+
+	            return empty;
+	        }
+
+	        ThermalCandidate selected;
+	        vector<int> desiredCore = runPowerBudgetMaxIPS(activeCoreIds, taskIds, predIPS, predPower, predTemp, selected);
+	        vector<migration> migrations = convertDesiredCoresToMigrations(activeCoreIds, desiredCore, taskIds);
+
+	        cout << "[MigrationH1] objective=power_budget_max_ips"
+	             << " time=" << time.getNS()
+	             << " active=" << activeCoreIds.size()
+	             << " power_budget=" << fixed << setprecision(4) << powerBudget
+	             << " power_budget_margin=" << fixed << setprecision(4) << powerBudgetMargin
+	             << " effective_power_budget=" << fixed << setprecision(4) << effectivePowerBudget()
+	             << " per_core_power_guard=" << fixed << setprecision(4) << perCorePowerGuard
+	             << " max_temp=" << fixed << setprecision(4) << maxTemp
+	             << " currentTotalPredIPS=" << fixed << setprecision(4) << current.totalIPS
+	             << " selectedTotalPredIPS=" << fixed << setprecision(4) << selected.totalIPS
+	             << " currentTotalPredPower=" << fixed << setprecision(4) << current.totalPower
+	             << " selectedTotalPredPower=" << fixed << setprecision(4) << selected.totalPower
+	             << " selectedMaxProfileTemp=" << fixed << setprecision(4) << selected.maxPredTemp
+	             << " feasible=" << (selected.feasible ? "true" : "false")
+	             << " migrations=" << migrations.size()
+	             << (selected.feasible ? "" : " reason=no_feasible_power_budget_mapping")
+	             << endl;
+
+	        return migrations;
+	    }
+	
+	    if (totalPredIPSBefore >= targetIPS) {
+        cout << "[MigrationH1] time=" << time.getNS()
+             << " active=" << activeCoreIds.size()
+             << " totalPredIPSBefore=" << fixed << setprecision(4) << totalPredIPSBefore
+             << " target=" << fixed << setprecision(4) << targetIPS
+             << " migrations=0 reason=target_already_met"
+             << endl;
+
+        return empty;
+    }
+
     vector<int> desiredState = runH1(activeCoreIds, predIPS, predPower);
     double totalPredIPSAfter = predictedTotalIPS(predIPS, desiredState);
-    vector<migration> migrations = convertDesiredStatesToMigrations(activeCoreIds, desiredState, activeCores);
+
+    if (totalPredIPSAfter <= totalPredIPSBefore + 1e-6) {
+        cout << "[MigrationH1] time=" << time.getNS()
+             << " active=" << activeCoreIds.size()
+             << " totalPredIPSBefore=" << fixed << setprecision(4) << totalPredIPSBefore
+             << " totalPredIPSAfter=" << fixed << setprecision(4) << totalPredIPSAfter
+             << " target=" << fixed << setprecision(4) << targetIPS
+             << " migrations=0 reason=no_predicted_improvement"
+             << endl;
+
+        return empty;
+    }
+
+    vector<migration> migrations = convertDesiredStatesToMigrations(activeCoreIds, desiredState, taskIds);
 
     cout << "[MigrationH1] time=" << time.getNS()
          << " active=" << activeCoreIds.size()
          << " totalPredIPSBefore=" << fixed << setprecision(4) << totalPredIPSBefore
          << " totalPredIPSAfter=" << fixed << setprecision(4) << totalPredIPSAfter
          << " target=" << fixed << setprecision(4) << targetIPS
-         << " migrations=" << migrations.size() << endl;
+         << " migrations=" << migrations.size()
+         << endl;
 
     return migrations;
 }

@@ -19,6 +19,12 @@ public:
                 const std::vector<int> &coreToState,
                 const std::vector<double> &enabledStates,
                 double targetIPS,
+                const std::string &objective,
+                double maxTemp,
+                double thermalMargin,
+                double powerBudget,
+                double powerBudgetMargin,
+                double perCorePowerGuard,
                 const std::string &profileFile,
                 bool debug = false);
 
@@ -36,14 +42,33 @@ private:
     typedef std::map<int, ProfileEntry> StateProfile;
     typedef std::map<std::string, StateProfile> ProfileMap;
 
+    struct ThermalCandidate {
+        std::vector<int> desiredCore;
+        double totalIPS;
+        double totalPower;
+        double maxPredTemp;
+        int movedItems;
+        bool feasible;
+        bool valid;
+
+        ThermalCandidate();
+    };
+
     const PerformanceCounters *performanceCounters;
     int numberOfCores;
     std::vector<int> coreToState;
     std::vector<double> enabledStates;
     double targetIPS;
+    std::string objective;
+    double maxTemp;
+    double thermalMargin;
+    double powerBudget;
+    double powerBudgetMargin;
+    double perCorePowerGuard;
     std::string profileFile;
     bool debug;
     bool warnedFallback;
+    bool warnedInvalidPowerBudget;
 
     ProfileMap profile;
 
@@ -56,18 +81,59 @@ private:
     int getStateForCore(unsigned int coreId) const;
     double getMeasuredIPSBillions(unsigned int coreId, double currentStateValue) const;
     double getMeasuredPower(unsigned int coreId) const;
+    double getMeasuredTemperature(unsigned int coreId) const;
+    bool isThermalObjective() const;
+    bool isPowerBudgetObjective() const;
+    bool isTargetIPSObjective() const;
+    double tempLimit() const;
+    double effectivePowerBudget() const;
 
     void buildPredictions(const std::vector<unsigned int> &activeCoreIds,
                           std::vector<std::vector<double> > &predIPS,
-                          std::vector<std::vector<double> > &predPower);
+                          std::vector<std::vector<double> > &predPower,
+                          std::vector<std::vector<double> > &predTemp);
 
     std::vector<int> runH1(const std::vector<unsigned int> &activeCoreIds,
                            const std::vector<std::vector<double> > &predIPS,
                            const std::vector<std::vector<double> > &predPower);
 
+    std::vector<int> runThermalMaxIPS(const std::vector<unsigned int> &activeCoreIds,
+                                      const std::vector<int> &taskIds,
+                                      const std::vector<std::vector<double> > &predIPS,
+                                      const std::vector<std::vector<double> > &predPower,
+                                      const std::vector<std::vector<double> > &predTemp,
+                                      ThermalCandidate &selected) const;
+    std::vector<int> runPowerBudgetMaxIPS(const std::vector<unsigned int> &activeCoreIds,
+                                          const std::vector<int> &taskIds,
+                                          const std::vector<std::vector<double> > &predIPS,
+                                          const std::vector<std::vector<double> > &predPower,
+                                          const std::vector<std::vector<double> > &predTemp,
+                                          ThermalCandidate &selected) const;
+    std::vector<int> getAvailableFixedCores(const std::vector<unsigned int> &activeCoreIds,
+                                            const std::vector<int> &taskIds) const;
+    ThermalCandidate evaluateThermalCandidate(const std::vector<unsigned int> &activeCoreIds,
+                                              const std::vector<int> &desiredCore,
+                                              const std::vector<std::vector<double> > &predIPS,
+                                              const std::vector<std::vector<double> > &predPower,
+                                              const std::vector<std::vector<double> > &predTemp) const;
+    ThermalCandidate evaluatePowerBudgetCandidate(const std::vector<unsigned int> &activeCoreIds,
+                                                  const std::vector<int> &desiredCore,
+                                                  const std::vector<std::vector<double> > &predIPS,
+                                                  const std::vector<std::vector<double> > &predPower,
+                                                  const std::vector<std::vector<double> > &predTemp) const;
+    bool isBetterThermalCandidate(const ThermalCandidate &candidate,
+                                  const ThermalCandidate &best,
+                                  bool requireFeasible) const;
+    bool isBetterPowerBudgetCandidate(const ThermalCandidate &candidate,
+                                      const ThermalCandidate &best,
+                                      bool requireFeasible) const;
+
     std::vector<migration> convertDesiredStatesToMigrations(const std::vector<unsigned int> &activeCoreIds,
                                                             const std::vector<int> &desiredState,
-                                                            const std::vector<bool> &activeCores) const;
+                                                            const std::vector<int> &taskIds) const;
+    std::vector<migration> convertDesiredCoresToMigrations(const std::vector<unsigned int> &activeCoreIds,
+                                                           const std::vector<int> &desiredCore,
+                                                           const std::vector<int> &taskIds) const;
 
     double predictedTotalIPS(const std::vector<std::vector<double> > &predIPS, const std::vector<int> &states) const;
     double predictedCurrentIPS(const std::vector<unsigned int> &activeCoreIds, const std::vector<std::vector<double> > &predIPS) const;
@@ -76,7 +142,8 @@ private:
                        double currentStateValue,
                        const std::string &benchmarkName,
                        const std::vector<double> &ips,
-                       const std::vector<double> &power) const;
+                       const std::vector<double> &power,
+                       const std::vector<double> &temp) const;
 };
 
 #endif

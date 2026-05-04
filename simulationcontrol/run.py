@@ -1,3 +1,4 @@
+import argparse
 import datetime
 import math
 import os
@@ -13,7 +14,13 @@ import sys
 
 
 from config import NUMBER_CORES, RESULTS_FOLDER, SNIPER_CONFIG, SCRIPTS, ENABLE_HEARTBEATS
-from resultlib.plot import create_plots
+
+try:
+    from resultlib.plot import create_plots
+    PLOT_IMPORT_ERROR = None
+except Exception as e:
+    create_plots = None
+    PLOT_IMPORT_ERROR = e
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNIPER_BASE = os.path.dirname(HERE)
@@ -38,6 +45,60 @@ def change_base_configuration(base_configuration):
                     line = '#' + line
             f.write(line)
             f.write('\n')
+
+
+def format_cfg_value(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
+
+
+def change_base_configuration_values(overrides):
+    """Override active base.cfg values by full config path.
+
+    Example key: scheduler/open/heuristic_h1/profile_file
+    This keeps the cfg: toggling mechanism intact, then applies experiment-specific
+    values such as target IPS and profile path.
+    """
+    if not overrides:
+        return
+
+    base_cfg = os.path.join(SNIPER_BASE, 'config/base.cfg')
+    with open(base_cfg, 'r') as f:
+        lines = f.read().splitlines()
+
+    current_section = ''
+    pending = dict((k, format_cfg_value(v)) for k, v in overrides.items())
+    output = []
+
+    for line in lines:
+        stripped = line.strip()
+        section_match = re.match(r'^\[([^\]]+)\]\s*$', stripped)
+        if section_match:
+            current_section = section_match.group(1)
+            output.append(line)
+            continue
+
+        if not stripped.startswith('#') and '=' in stripped:
+            key = stripped.split('=', 1)[0].strip()
+            full_key = '{}/{}'.format(current_section, key) if current_section else key
+            if full_key in pending:
+                indent = line[:len(line) - len(line.lstrip())]
+                line = '{}{} = {}'.format(indent, key, pending.pop(full_key))
+
+        output.append(line)
+
+    if pending:
+        output.append('')
+        output.append('# Experiment overrides added by simulationcontrol/run.py')
+        for full_key, value in sorted(pending.items()):
+            section, key = full_key.rsplit('/', 1)
+            output.append('[{}]'.format(section))
+            output.append('{} = {}'.format(key, value))
+
+    with open(base_cfg, 'w') as f:
+        f.write('\n'.join(output))
+        f.write('\n')
 
 
 def prev_run_cleanup():
@@ -106,13 +167,17 @@ def save_output(base_configuration, benchmark, console_output, cpistack, started
         elif 'app_mapping.' in f:
             shutil.copy(os.path.join(BENCHMARKS, f), directory)
 
-    create_plots(run)
+    if create_plots is not None:
+        create_plots(run)
+    else:
+        print('plot generation is unavailable ({}); skipped plots for {}'.format(PLOT_IMPORT_ERROR, run))
 
 
-def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None):
+def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None, base_cfg_overrides=None):
     print('running {} with configuration {}'.format(benchmark, '+'.join(base_configuration)))
     started = datetime.datetime.now()
     change_base_configuration(base_configuration)
+    change_base_configuration_values(base_cfg_overrides)
 
     prev_run_cleanup()
 
@@ -171,9 +236,9 @@ def run(base_configuration, benchmark, ignore_error=False, perforation_script: s
         raise Exception('return code != 0')
 
 
-def try_run(base_configuration, benchmark, ignore_error=False):
+def try_run(base_configuration, benchmark, ignore_error=False, base_cfg_overrides=None):
     try:
-        run(base_configuration, benchmark, ignore_error=ignore_error)
+        run(base_configuration, benchmark, ignore_error=ignore_error, base_cfg_overrides=base_cfg_overrides)
     except KeyboardInterrupt:
         raise
     except Exception as e:
@@ -258,6 +323,98 @@ def get_workload(benchmark, cores, parallelism=None, number_tasks=None, input_se
             raise Infeasible()
     else:
         raise Exception('either parallelism or number_tasks needs to be set')
+
+
+def h1_overrides(profile_file,
+                 target_ips,
+                 max_temp,
+                 thermal_margin,
+                 power_budget,
+                 power_budget_margin,
+                 per_core_power_guard,
+                 debug=False,
+                 migration_epoch=1000000,
+                 dvfs_epoch=1000000):
+    states = '1.0,2.0,3.0,4.0'
+    core_state = '0,1,2,3'
+    frequencies = '1000,2000,3000,4000'
+    profile_file = os.path.abspath(profile_file)
+    objective = 'power_budget_max_ips'
+    return {
+        'scheduler/open/migration/epoch': migration_epoch,
+        'scheduler/open/heuristic_h1/objective': objective,
+        'scheduler/open/heuristic_h1/power_budget': power_budget,
+        'scheduler/open/heuristic_h1/power_budget_margin': power_budget_margin,
+        'scheduler/open/heuristic_h1/per_core_power_guard': per_core_power_guard,
+        'scheduler/open/heuristic_h1/max_temp': max_temp,
+        'scheduler/open/heuristic_h1/thermal_margin': thermal_margin,
+        'scheduler/open/heuristic_h1/num_states': 4,
+        'scheduler/open/heuristic_h1/state_value': states,
+        'scheduler/open/heuristic_h1/core_state': core_state,
+        'scheduler/open/heuristic_h1/target_ips': target_ips,
+        'scheduler/open/heuristic_h1/profile_file': profile_file,
+        'scheduler/open/heuristic_h1/debug': debug,
+        'scheduler/open/dvfs/dvfs_epoch': dvfs_epoch,
+        'scheduler/open/dvfs/fixed_states/frequency': frequencies,
+        'scheduler/open/dvfs/heuristic_h1/objective': objective,
+        'scheduler/open/dvfs/heuristic_h1/power_budget': power_budget,
+        'scheduler/open/dvfs/heuristic_h1/power_budget_margin': power_budget_margin,
+        'scheduler/open/dvfs/heuristic_h1/per_core_power_guard': per_core_power_guard,
+        'scheduler/open/dvfs/heuristic_h1/max_temp': max_temp,
+        'scheduler/open/dvfs/heuristic_h1/thermal_margin': thermal_margin,
+        'scheduler/open/dvfs/heuristic_h1/num_states': 4,
+        'scheduler/open/dvfs/heuristic_h1/state_value': states,
+        'scheduler/open/dvfs/heuristic_h1/frequency': frequencies,
+        'scheduler/open/dvfs/heuristic_h1/profile_file': profile_file,
+        'scheduler/open/dvfs/heuristic_h1/debug': debug,
+    }
+
+
+def h1_experiment(benchmark='parsec-blackscholes',
+                  parallelism=4,
+                  input_set='simsmall',
+                  profile_file=None,
+                  target_ips=10.0,
+                  max_temp=90.0,
+                  thermal_margin=3.0,
+                  power_budget=0.0,
+                  power_budget_margin=1.0,
+                  per_core_power_guard=0.0,
+                  include_maxfreq=False,
+                  debug=False,
+                  ignore_error=False):
+    if profile_file is None:
+        profile_file = os.path.join(SNIPER_BASE, 'common/scheduler/policies/heuristic_h1_profiles.example.tsv')
+        print('[H1 experiment] using example profile file: {}'.format(profile_file))
+        print('[H1 experiment] replace --profile-file with your measured profile for real results.')
+
+    workload = get_instance(benchmark, parallelism, input_set=input_set)
+    if power_budget <= 0.0:
+        print('[H1 experiment][Warning] objective=power_budget_max_ips but --power-budget={} <= 0; dynamic H1 optimization will fall back safely.'.format(power_budget))
+
+    overrides = h1_overrides(profile_file,
+                             target_ips,
+                             max_temp,
+                             thermal_margin,
+                             power_budget,
+                             power_budget_margin,
+                             per_core_power_guard,
+                             debug=debug)
+    dvfs_overrides = dict(overrides)
+    dvfs_overrides['scheduler/open/migration/logic'] = 'off'
+
+    if include_maxfreq:
+        run(['4.0GHz', 'maxFreq', 'slowDVFS'], workload, ignore_error=ignore_error)
+
+    # Static heterogeneous fixed-frequency cores, no migration. This isolates the
+    # value of H1's dynamic thread movement.
+    run(['fixedStates', 'slowDVFS'], workload, ignore_error=ignore_error, base_cfg_overrides=overrides)
+
+    # H1 dynamic mapping over fixed-VF cores: cores stay at 1/2/3/4 GHz, threads migrate.
+    run(['heuristicH1', 'fixedStates', 'slowDVFS'], workload, ignore_error=ignore_error, base_cfg_overrides=overrides)
+
+    # H1 per-core DVFS: threads stay pinned, and H1 directly chooses per-core frequencies.
+    run(['heuristicH1DVFS', 'slowDVFS'], workload, ignore_error=ignore_error, base_cfg_overrides=dvfs_overrides)
 
 
 def example():
@@ -373,7 +530,45 @@ def test_static_power():
 
 
 def main():
-    example()
+    if len(sys.argv) > 1 and sys.argv[1] == 'h1':
+        parser = argparse.ArgumentParser(description='Run the 4-core H1 power-budgeted fixed-VF and per-core DVFS experiments.')
+        parser.add_argument('--benchmark', default='parsec-blackscholes')
+        parser.add_argument('--parallelism', type=int, default=4)
+        parser.add_argument('--input-set', default='simsmall')
+        parser.add_argument('--profile-file', default=None)
+        parser.add_argument('--target-ips', type=float, default=10.0,
+                            help='Backward-compatible target throughput for non-power-budget H1 mode.')
+        parser.add_argument('--power-budget', type=float, default=0.0,
+                            help='Total predicted power budget for power_budget_max_ips.')
+        parser.add_argument('--power-budget-margin', type=float, default=1.0,
+                            help='Multiplier applied to --power-budget before scheduling.')
+        parser.add_argument('--per-core-power-guard', type=float, default=0.0,
+                            help='Optional per-core predicted power cap; 0 disables it.')
+        parser.add_argument('--max-temp', type=float, default=90.0)
+        parser.add_argument('--thermal-margin', type=float, default=3.0)
+        parser.add_argument('--include-maxfreq', action='store_true',
+                            help='Also run the all-cores max-frequency baseline.')
+        parser.add_argument('--debug-h1', action='store_true',
+                            help='Enable verbose H1 prediction and migration logs.')
+        parser.add_argument('--ignore-error', action='store_true')
+        args = parser.parse_args(sys.argv[2:])
+        h1_experiment(benchmark=args.benchmark,
+                      parallelism=args.parallelism,
+                      input_set=args.input_set,
+                      profile_file=args.profile_file,
+                      target_ips=args.target_ips,
+                      max_temp=args.max_temp,
+                      thermal_margin=args.thermal_margin,
+                      power_budget=args.power_budget,
+                      power_budget_margin=args.power_budget_margin,
+                      per_core_power_guard=args.per_core_power_guard,
+                      include_maxfreq=args.include_maxfreq,
+                      debug=args.debug_h1,
+                      ignore_error=args.ignore_error)
+        return
+
+
+    # example()
     # test_static_power()
     # multi_program()
 

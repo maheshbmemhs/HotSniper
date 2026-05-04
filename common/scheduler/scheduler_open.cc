@@ -16,6 +16,7 @@
 #include "policies/dvfsMaxFreq.h"
 #include "policies/dvfsFixedPower.h"
 #include "policies/dvfsFixedStates.h"
+#include "policies/dvfsH1Thermal.h"
 #include "policies/dvfsTSP.h"
 #include "policies/dvfsTestStaticPower.h"
 #include "policies/migration_h1.h"
@@ -334,6 +335,29 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 			frequencies.push_back(Sim()->getCfg()->getIntArray("scheduler/open/dvfs/fixed_states/frequency", coreCounter));
 		}
 		dvfsPolicy = new DVFSFixedStates(numberOfCores, frequencies);
+	} else if (policyName == "heuristicH1DVFS") {
+		int numStates = Sim()->getCfg()->getInt("scheduler/open/dvfs/heuristic_h1/num_states");
+		vector<double> enabledStates;
+		vector<int> frequencies;
+		for (int state = 0; state < numStates; state++) {
+			enabledStates.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/heuristic_h1/state_value", state));
+			frequencies.push_back(Sim()->getCfg()->getIntArray("scheduler/open/dvfs/heuristic_h1/frequency", state));
+		}
+			string objective = Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/objective").c_str();
+			double maxTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/max_temp");
+			double thermalMargin = Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/thermal_margin");
+			double powerBudget = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/power_budget")
+				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/power_budget")
+				: 0.0;
+			double powerBudgetMargin = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/power_budget_margin")
+				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/power_budget_margin")
+				: 1.0;
+			double perCorePowerGuard = Sim()->getCfg()->hasKey("scheduler/open/dvfs/heuristic_h1/per_core_power_guard")
+				? Sim()->getCfg()->getFloat("scheduler/open/dvfs/heuristic_h1/per_core_power_guard")
+				: 0.0;
+			string profileFile = Sim()->getCfg()->getString("scheduler/open/dvfs/heuristic_h1/profile_file").c_str();
+			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/dvfs/heuristic_h1/debug", false);
+			dvfsPolicy = new DVFSH1Thermal(performanceCounters, numberOfCores, enabledStates, frequencies, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, debug);
 	} else if (policyName == "PCGov") {
 		double ambientTemperature = Sim()->getCfg()->getFloat("periodic_thermal/ambient_temperature");
 		double maxTemperature = Sim()->getCfg()->getFloat("periodic_thermal/max_temperature");
@@ -380,9 +404,28 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 		}
 
 		double targetIPS = Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/target_ips");
-		string profileFile = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/profile_file");
-		bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/debug", false);
-		migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, profileFile, debug);
+		string objective = "target_ips";
+		if (Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/objective")) {
+			objective = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/objective").c_str();
+		}
+		double maxTemp = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/max_temp")
+			? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/max_temp")
+			: 90.0;
+			double thermalMargin = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/thermal_margin")
+				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/thermal_margin")
+				: 3.0;
+			double powerBudget = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/power_budget")
+				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/power_budget")
+				: 0.0;
+			double powerBudgetMargin = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/power_budget_margin")
+				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/power_budget_margin")
+				: 1.0;
+			double perCorePowerGuard = Sim()->getCfg()->hasKey("scheduler/open/heuristic_h1/per_core_power_guard")
+				? Sim()->getCfg()->getFloat("scheduler/open/heuristic_h1/per_core_power_guard")
+				: 0.0;
+			string profileFile = Sim()->getCfg()->getString("scheduler/open/heuristic_h1/profile_file").c_str();
+			bool debug = Sim()->getCfg()->getBoolDefault("scheduler/open/heuristic_h1/debug", false);
+			migrationPolicy = new MigrationH1(performanceCounters, numberOfCores, coreToState, enabledStates, targetIPS, objective, maxTemp, thermalMargin, powerBudget, powerBudgetMargin, perCorePowerGuard, profileFile, debug);
 	} //else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;

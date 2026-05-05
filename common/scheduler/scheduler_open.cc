@@ -19,6 +19,7 @@
 #include "policies/dvfsTestStaticPower.h"
 #include "policies/mapFirstUnused.h"
 #include "policies/pcgov.h"
+#include "policies/dynThreadMapping_dvfs.h"
 
 #include <iomanip>
 #include <random>
@@ -346,6 +347,17 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 		String thermalModelFilename = Sim()->getCfg()->getString("periodic_thermal/thermal_model");
 		thermalModel = new ThermalModel((unsigned int)coreRows, (unsigned int)coreColumns, thermalModelFilename, ambientTemperature, maxTemperature, inactivePower, tdp);
 		dvfsPolicy = new DVFSTSP(thermalModel, performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize);
+	} else if(policyName == "DynThreadMapping_dvfs"){
+		float criticalTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping_dvfs/cricital_temperature");
+		float recovery = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping_dvfs/recovered_temperature");
+		float target_ips = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping_dvfs/target_ips");
+		String profile_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping_dvfs/profile_path");
+		int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/DynThreadMapping_dvfs/num_states");
+		vector<float> core_states;
+		for(int i =0;i<num_states;i++){
+			core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping_dvfs/core_states", i));
+		}
+		dvfsPolicy = new DynThreadMapping_dvfs(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),target_ips,core_states,criticalTemp,recovery);
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);

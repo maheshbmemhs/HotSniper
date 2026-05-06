@@ -4,6 +4,8 @@ import os
 import pandas as pd
 import io
 import json
+from resultlib import get_active_cores
+from resultlib import get_ips_traces
 
 core_names =["C_0","C_1","C_2","C_3"]
 num_cores = 4
@@ -170,7 +172,7 @@ def create_experiment_data_txts(runs,log, out_filename,core_level=False, atype='
     f.write("Run "+core_names[0]+" "+core_names[1]+" "+core_names[2]+" "+core_names[3]+" total_"+all_core_metric+"\n")
     for run in runs:
         filename = get_file(run["path"], log)
-        df_all = pd.read_csv(filename, delim_whitespace=True)
+        df_all = pd.read_csv(filename, sep=r'\s+')
         dfs = get_core_aggregate(df_all, core_level, atype)
         
 
@@ -207,7 +209,7 @@ def create_energy_data_txt(runs,out_filename):
 
     for run in runs:
         filename = get_file(run["path"], "PeriodicPower.log")
-        df_all = pd.read_csv(filename, delim_whitespace=True)
+        df_all = pd.read_csv(filename, sep=r'\s+')
         dfs = get_core_aggregate(df_all, True)
 
         for label, df_core in dfs:
@@ -226,6 +228,36 @@ def create_energy_data_txt(runs,out_filename):
             l3_energy=df_all["L3"].mean()*time
             f.write("{:.2f} \n".format(all_core_vals.sum()+l3_energy))
 
+def create_ips_data_txts(runs,out_filename):
+    f = open(out_filename, "w")
+    f.write("Run "+core_names[0]+" "+core_names[1]+" "+core_names[2]+" "+core_names[3]+" avg_workers\n")
+    for run in runs:
+        f.write(run["name"]+" ")
+        active_cores = get_active_cores(run["path"])
+        traces = get_ips_traces(run["path"])
+        worker_avg =0
+        count =0
+        for core, trace in enumerate(traces):
+            if(core in active_cores):
+                valid_trace = [value for value in trace if value is not None]
+                if len(valid_trace) > 0:
+                    tracelen = len(trace)
+                    sum=0
+                    for i in trace:
+                        if i > 10000:
+                            sum+=i
+                        else:
+                            tracelen-=1
+                    f.write("{:.2f} ".format(float(sum/tracelen)/1e9))
+                    if(core>0):
+                        count+=1
+                        worker_avg +=sum/tracelen
+            else:   
+                f.write("{:.2f} ".format(0.0))
+        avg= float(worker_avg/count)/1e9
+        f.write("{:.2f} ".format(avg))
+        f.write("\n")
+    
 def create_data(experiments):
     for experiment in experiments["experiments"]:
         runs = experiment["runs"]
@@ -243,6 +275,8 @@ def create_data(experiments):
         #Create text file for energy
         create_energy_data_txt(runs,out_path+"energy-"+name+".txt")
         create_cpi_data_txts(runs,out_path+"cpi-"+name+".txt")
+        create_ips_data_txts(runs,out_path+"ips-"+name+".txt")
+
         #create_cpi_stack_data(runs,out_path+"cpi-"+name+".txt")
 
 if __name__ == '__main__':

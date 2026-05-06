@@ -357,9 +357,30 @@ def coldestcore_multiprogram_demo():
 
     run(base_configuration, benchmarks)
 
+def mulitprog_fixedfreqmigration_demo():
+    input_set = 'simsmall'
+    base_configuration = ['{:.1f}GHz'.format(4), 'migrationSota','fixedFreq' ,'slowDVFS']
+    benchmark_set = (
+        'parsec-blackscholes',
+        'parsec-streamcluster',
+    )
+
+    if ENABLE_HEARTBEATS == True:
+        base_configuration.append('hb_enabled')
+
+    benchmarks = ''
+    for i, benchmark in enumerate(benchmark_set):
+        min_parallelism = get_feasible_parallelisms(benchmark)[0]
+        if i != 0:
+            benchmarks = benchmarks + ',' + get_instance(benchmark, min_parallelism, input_set)
+        else:
+            benchmarks = benchmarks + get_instance(benchmark, min_parallelism, input_set)
+
+    run(base_configuration, benchmarks)
+
 
 def fixedfreqmigration_demo():
-    run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+    run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-streamcluster', 3, input_set='simsmall'))
 
 def example_symmetric_perforation():
     for benchmark in (
@@ -441,9 +462,10 @@ def main():
     # ondemand_demo()
     # coldestcore_demo()
     # combined_demo()
-    fixedfreqmigration_demo()
+    # fixedfreqmigration_demo()
     # ondemand_multiprogram_demo()
     # coldestcore_multiprogram_demo()
+    mulitprog_fixedfreqmigration_demo()
     
 if __name__ == '__main__':
     main()

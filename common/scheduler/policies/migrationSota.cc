@@ -4,6 +4,7 @@
 #include "neighbor_prediction.h"
 #include <algorithm> 
 #include <set>
+#include <climits> 
 using namespace std;
 
 migrationSota::migrationSota(
@@ -62,7 +63,7 @@ std::vector<migration> migrationSota::migrate(
     
 
     int temp;
-    float T=10;
+    float T=3.7;
     NeighborPrediction  pred("profile.txt");
 
     for (int c = 0; c < coreRows * coreColumns; c++) {
@@ -97,7 +98,7 @@ std::vector<migration> migrationSota::migrate(
 
     int thread_idx;
     std::unordered_map<int, int> threads_power;
-    for (int c = 0; c < coreRows * coreColumns; c++) {
+    for (int c = coreRows * coreColumns - 1; c >= 0; c--) {
         cout << "[DEBUG] Processing core " << c << ", threads available for assignment:" << endl;
         for (auto& pair : threads_power) {
             cout << "  Thread " << pair.first << " power=" << pair.second << endl;
@@ -110,23 +111,29 @@ std::vector<migration> migrationSota::migrate(
                 auto near = pred.getNearestBenchmark(c+1,IPS);
                 threads_power[pair.first] =near[c+1].power ;//(rand() % 100 + 1);//performanceCounters->getPowerOfCore(coreId);
             } else {
-                threads_power[pair.first]  = -1;
+                threads_power[pair.first]  = INT_MAX;//-1;
             }
            
         }
 
         int maxVal=-1;
-
+        int minVal=INT_MAX;
+        // for (auto& pair : threads_power){
+        //     if(threads_power[pair.first] > maxVal) {
+        //         maxVal = threads_power[pair.first];
+        //         thread_idx = pair.first;
+        //     }
+        // }
         for (auto& pair : threads_power){
-            if(threads_power[pair.first] > maxVal) {
-                maxVal = threads_power[pair.first];
+            if(threads_power[pair.first] < minVal) {
+                minVal = threads_power[pair.first];
                 thread_idx = pair.first;
             }
         }
 
-        if(maxVal != -1) {
+        if(minVal != INT_MAX) {
             newthreads_core[thread_idx] = c;
-            cout << "[DEBUG] Core " << c << " assigned thread " << thread_idx << " with power " << maxVal << endl;
+            cout << "[DEBUG] Core " << c << " assigned thread " << thread_idx << " with power " << minVal << endl;
             auto IPS = performanceCounters->getIPSOfCore(threads_core[thread_idx]);
             auto near = pred.getNearestBenchmark(c+1,IPS);
             newcore_ips[c] = near[c+1].ips;

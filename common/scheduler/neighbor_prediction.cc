@@ -3,7 +3,7 @@
 #include <iostream>
 #include <sstream>
 #include <limits>
-// #include <cmath>
+#include <cmath>
 
 NeighborPrediction::NeighborPrediction(std::string benchmark_path){
     std::ifstream file(benchmark_path);
@@ -57,7 +57,7 @@ std::unordered_map<float,NeighborPrediction::core_status> NeighborPrediction::ge
     std::string nearest_benchmark;
     float min = std::numeric_limits<float>::max();
     for(auto s:statuses){
-        float diff = abs(s.ips-ips); //fabs
+        float diff = fabs(s.ips-ips); //fabs
         if(diff<min){
             nearest_benchmark= s.benchmarkName;
             min = diff;

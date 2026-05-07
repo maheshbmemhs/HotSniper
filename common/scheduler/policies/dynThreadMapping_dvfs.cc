@@ -55,7 +55,7 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
         for(int i =0;i<(coreRows * coreColumns);i++){
             if(activeCores.at(i)){
                 float current_ips = getMeasuredIPSBillions(i);
-                if(current_ips == 0.0){
+                if(current_ips <= 0.0){
                     std::cout << "[Scheduler][DynThreadMapping_dvfs]: Warning IPS of core "<<i<<" is zero"<< std::endl;
                 }
                 float current_state = float(oldFrequencies[i])/1000.0f;
@@ -64,7 +64,7 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
                 predictions.push_back({});
             }
         }
-
+        
         bool failed = false;
         while(!checkConstraints(predictions,currentStatesIdx,activeCores)){
             auto best = get_best_move(predictions,currentStatesIdx,activeCores);
@@ -82,12 +82,11 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
             std::cout << "[Scheduler][DynThreadMapping_dvfs]: Completed DVFS"<< std::endl;
         }
         std::cout << "[Scheduler][DynThreadMapping_dvfs]: Final States "<< std::endl;
-        
+        currentStatesIdx[0] = 2; // Fix core 0 for main thread
+        //currentStatesIdx[2] = 2; // Fix core 2 for main thread
+
         // Update core frequency
         for(int i=0;i<(coreRows * coreColumns);i++){
-            if(i==0){
-                currentStatesIdx[i] = 2;
-            }
             newFrequencies[i]=int(1000*core_states[currentStatesIdx[i]] + 0.5);
             std::cout << "[Scheduler][DynThreadMapping_dvfs]: core "<< i << ": freq "<<core_states[currentStatesIdx[i]]<< std::endl;
 
@@ -102,6 +101,9 @@ DynThreadMapping_dvfs::Move DynThreadMapping_dvfs::get_best_move(const std::vect
     Move best_move;
     float best_score = 0.0;
     for(int i = 1;i<currentStatesIdx.size(); i++){
+        //if(i==2){
+            //continue;
+        //}
         if(activeCores.at(i)){
             // Cant go any higher than this state
             if(currentStatesIdx[i]+1 >= core_states.size()){
@@ -159,7 +161,10 @@ bool DynThreadMapping_dvfs::checkConstraints(const std::vector<NeighborPredictio
                                              const std::vector<int>& currentStateIdx, 
                                              const std::vector<bool>& activeCores){
     float total_ips = 0.0f;
-    for (unsigned int coreCounter = 0; coreCounter < coreRows * coreColumns; coreCounter++) {
+    for (unsigned int coreCounter = 1; coreCounter < coreRows * coreColumns; coreCounter++) {
+        //if(coreCounter==2){
+        //    continue;
+        //}
         if(activeCores.at(coreCounter)){
             auto prediction = predictions[coreCounter];
             float new_clock_speed = core_states[currentStateIdx[coreCounter]];

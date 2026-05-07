@@ -7,6 +7,10 @@ import os
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 6)
 
+# Colorblind-friendly palette (blue and orange with good contrast)
+colorblind_colors = ['#0173B2', '#DE8F05', '#029E73', '#CC78BC', '#CA9161', '#949494']
+hatches = ['///', '\\\\\\', '|||', '---', '+++', 'xxx']
+
 # Create output directory for graphs
 output_dir = 'graphs'
 os.makedirs(output_dir, exist_ok=True)
@@ -37,6 +41,7 @@ def create_label(row):
 
 df['benchmark'] = df.apply(create_label, axis=1)
 df['config'] = df['benchmark'] + '-' + df['benchmark_type'].str.replace('-program', '')
+df['config_with_governor'] = df['config'] + '-' + df['governor']
 
 # Create graphs for each metric
 for metric_col, metric_name in metrics.items():
@@ -59,7 +64,8 @@ for metric_col, metric_name in metrics.items():
             gov_data.append(val.values[0] if len(val) > 0 else 0)
         
         offset = width * (i - len(governors)/2 + 0.5)
-        bars = ax.bar([xi + offset for xi in x], gov_data, width, label=governor)
+        bars = ax.bar([xi + offset for xi in x], gov_data, width, label=governor,
+                      color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
         
         # Add value labels on bars
         for bar in bars:
@@ -103,7 +109,8 @@ for idx, (metric_col, metric_name) in enumerate(metrics.items()):
             gov_data.append(val.values[0] if len(val) > 0 else 0)
         
         offset = width * (i - len(governors)/2 + 0.5)
-        ax.bar([xi + offset for xi in x], gov_data, width, label=governor)
+        ax.bar([xi + offset for xi in x], gov_data, width, label=governor,
+               color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
     
     ax.set_xlabel('Configuration', fontsize=10, fontweight='bold')
     ax.set_ylabel(metric_name, fontsize=10, fontweight='bold')
@@ -129,19 +136,16 @@ width = 0.15
 
 for i, core_col in enumerate(core_temp_cols):
     offset = width * (i - len(core_temp_cols)/2 + 0.5)
-    ax.bar([xi + offset for xi in x], df[core_col], width, label=f'Core {i}')
+    ax.bar([xi + offset for xi in x], df[core_col], width, label=f'Core {i}',
+           color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
 
-ax.set_xlabel('Run ID', fontsize=12, fontweight='bold')
+ax.set_xlabel('Configuration', fontsize=12, fontweight='bold')
 ax.set_ylabel('Temperature (°C)', fontsize=12, fontweight='bold')
 ax.set_title('Per-Core Temperature Comparison', fontsize=14, fontweight='bold')
 ax.set_xticks(x)
-ax.set_xticklabels(df['run_id'])
+ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right')
 ax.legend()
 ax.grid(axis='y', alpha=0.3)
-
-# Add governor labels
-for i, row in df.iterrows():
-    ax.text(i, -10, row['governor'][:4], ha='center', fontsize=8, rotation=45)
 
 plt.tight_layout()
 filename = f"{output_dir}/per_core_temperature.png"
@@ -156,18 +160,16 @@ core_power_cols = ['power_C0_W', 'power_C1_W', 'power_C2_W', 'power_C3_W']
 
 for i, core_col in enumerate(core_power_cols):
     offset = width * (i - len(core_power_cols)/2 + 0.5)
-    ax.bar([xi + offset for xi in x], df[core_col], width, label=f'Core {i}')
+    ax.bar([xi + offset for xi in x], df[core_col], width, label=f'Core {i}',
+           color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
 
-ax.set_xlabel('Run ID', fontsize=12, fontweight='bold')
+ax.set_xlabel('Configuration', fontsize=12, fontweight='bold')
 ax.set_ylabel('Power (W)', fontsize=12, fontweight='bold')
 ax.set_title('Per-Core Power Comparison', fontsize=14, fontweight='bold')
 ax.set_xticks(x)
-ax.set_xticklabels(df['run_id'])
+ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right')
 ax.legend()
 ax.grid(axis='y', alpha=0.3)
-
-for i, row in df.iterrows():
-    ax.text(i, -0.5, row['governor'][:4], ha='center', fontsize=8, rotation=45)
 
 plt.tight_layout()
 filename = f"{output_dir}/per_core_power.png"

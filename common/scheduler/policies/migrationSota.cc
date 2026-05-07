@@ -63,7 +63,7 @@ std::vector<migration> migrationSota::migrate(
     
 
     int temp;
-    float T=3.7;
+    float T=4.3;
     NeighborPrediction  pred("profile.txt");
 
     for (int c = 0; c < coreRows * coreColumns; c++) {

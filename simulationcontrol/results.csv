@@ -3,4 +3,31 @@ date,config,tasks,sim. time (ns),avg resp time (ns),resp times (ns),peak power /
 2026-04-03_20.37,2.0GHz+maxFreq+slowDVFS,blackscholes-simsmall-2,"62,156,900","62,156,903","62,156,903",0.62,5.90,0.37
 2026-04-20_10.43,1.0GHz+maxFreq+slowDVFS,streamcluster-simsmall-2,"544,497,500","544,497,553","544,497,553",0.26,3.28,1.79
 2026-04-20_11.11,1.0GHz+maxFreq+slowDVFS,streamcluster-simsmall-2,"543,781,200","543,781,285","543,781,285",0.26,3.29,1.79
-2026-05-01_07.52,4.0GHz+PCGov+slowDVFS,blackscholes-simsmall-2,"52,949,200","52,949,297","52,949,297",1.71,6.54,0.35
+2026-05-01_13.11,4.0GHz+ondemand+fastDVFS,blackscholes-simsmall-2,"67,053,000","67,053,063","67,053,063",2.28,5.93,0.40
+2026-05-01_16.03,2.4GHz+maxFreq+slowDVFS+coldestCore,blackscholes-simsmall-2,"30,934,600","30,934,644","30,934,644",2.27,17.65,0.55
+2026-05-02_09.05,4.0GHz+coldestCore+ondemand+fastDVFS,blackscholes-simsmall-2,"65,820,900","65,820,956","65,820,956",2.28,6.04,0.40
+2026-05-02_13.50,4.0GHz+fixedFreq+coldestCore+slowDVFS,blackscholes-simsmall-2,"75,684,900","75,684,933","75,684,933",1.48,5.82,0.44
+2026-05-03_11.37,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"59,734,200","59,734,249","59,734,249",0.98,5.79,0.35
+2026-05-03_14.32,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"61,505,100","61,505,149","61,505,149",0.98,5.82,0.36
+2026-05-03_16.37,4.0GHz+ondemand+fastDVFS+hb_enabled,"blackscholes-simsmall-1, streamcluste...","510,851,500","311,234,809","125,106,427  497,363,192",2.22,4.58,2.34
+2026-05-03_19.07,4.0GHz+ondemand+fastDVFS+hb_enabled,"blackscholes-simsmall-1, blackscholes...","137,975,800","121,675,464","118,863,442  124,487,487",2.27,5.80,0.80
+2026-05-03_19.49,4.0GHz+ondemand+fastDVFS,streamcluster-simsmall-2,"318,950,200","318,950,207","318,950,207",2.14,6.69,2.13
+2026-05-03_20.57,4.0GHz+maxFreq+slowDVFS+coldestCore,streamcluster-simsmall-2,"144,632,600","144,632,610","144,632,610",2.17,21.44,3.10
+2026-05-03_21.38,4.0GHz+coldestCore+ondemand+fastDVFS,blackscholes-simsmall-2,"64,466,300","64,466,356","64,466,356",2.34,6.16,0.40
+2026-05-03_22.29,4.0GHz+coldestCore+ondemand+fastDVFS,streamcluster-simsmall-2,"314,243,100","314,243,128","314,243,128",2.17,6.87,2.16
+2026-05-04_12.28,4.0GHz+fixedFreq+slowDVFS+coldestCore,blackscholes-simsmall-2,"75,237,700","75,237,701","75,237,701",1.50,5.82,0.44
+2026-05-04_12.35,4.0GHz+fixedFreq+slowDVFS+coldestCore,streamcluster-simsmall-2,"252,005,600","252,005,661","252,005,661",2.08,9.60,2.42
+2026-05-04_15.35,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-3,"36,381,300","36,381,305","36,381,305",1.70,9.62,0.35
+2026-05-04_20.19,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"69,888,100","69,888,114","69,888,114",0.64,5.67,0.40
+2026-05-04_21.46,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"69,767,600","69,767,690","69,767,690",0.65,5.67,0.40
+2026-05-05_04.59,4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled,"blackscholes-simsmall-1, blackscholes...","118,318,200","90,260,637","118,318,254  62,203,020",1.49,7.20,0.85
+2026-05-05_05.14,4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled,"blackscholes-simsmall-1, streamcluste...","516,373,800","310,964,995","119,044,532  502,885,459",2.43,5.71,2.95
+2026-05-05_06.01,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"70,009,800","70,009,800","70,009,800",0.65,5.65,0.40
+2026-05-05_10.26,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2--good1,"47,816,700","47,816,724","47,816,724",2.28,9.15,0.44
+2026-05-05_11.39,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"34,286,400","34,286,401","34,286,401",2.29,12.52,0.43
+2026-05-05_12.00,4.0GHz+fixedFreq+migrationSota+slowDVFS,blackscholes-simsmall-2,"34,390,400","34,390,455","34,390,455",2.27,12.54,0.43
+2026-05-05_14.31,4.0GHz+fixedFreq+migrationSota+slowDVFS,streamcluster-simsmall-2,"247,423,800","247,423,833","247,423,833",2.09,11.87,2.94
+2026-05-05_15.22,4.0GHz+fixedFreq+migrationSota+slowDVFS,streamcluster-simsmall-2-good2.1,"180,772,400","180,772,441","180,772,441",2.12,13.98,2.53
+2026-05-05_16.04,4.0GHz+fixedFreq+migrationSota+slowDVFS,streamcluster-simsmall-2-good4.0,"181,518,800","181,518,826","181,518,826",2.14,13.94,2.53
+2026-05-05_17.13,4.0GHz+migrationSota+fixedFreq+slowDVFS+hb_enabled,"blackscholes-simsmall-1, blackscholes...","84,249,400","68,877,274","66,993,506  70,761,043",2.29,11.11,0.94
+2026-05-05_18.17,4.0GHz+migrationSota+fixedFreq+slowDVFS+hb_enabled,"blackscholes-simsmall-1, streamcluste...","231,486,100","140,704,961","63,412,123  217,997,800",2.43,12.78,2.96

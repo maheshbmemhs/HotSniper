@@ -308,7 +308,7 @@ def ondemand_demo():
 
 def coldestcore_demo():
     run(['{:.1f}GHz'.format(4), 'fixedFreq', 'slowDVFS', 'coldestCore'],
-        get_instance('parsec-streamcluster', 3, input_set='simsmall'))
+        get_instance('parsec-blackscholes', 4, input_set='simsmall'))
 
 def combined_demo():
     # This will use coldestCore + ondemand together
@@ -380,7 +380,7 @@ def mulitprog_fixedfreqmigration_demo():
 
 
 def fixedfreqmigration_demo():
-    run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-streamcluster', 3, input_set='simsmall'))
+    run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 def example_symmetric_perforation():
     for benchmark in (
@@ -462,10 +462,10 @@ def main():
     # ondemand_demo()
     # coldestcore_demo()
     # combined_demo()
-    # fixedfreqmigration_demo()
+    fixedfreqmigration_demo()
     # ondemand_multiprogram_demo()
     # coldestcore_multiprogram_demo()
-    mulitprog_fixedfreqmigration_demo()
+    # mulitprog_fixedfreqmigration_demo()
     
 if __name__ == '__main__':
     main()

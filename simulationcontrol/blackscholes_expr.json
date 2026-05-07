@@ -1,32 +1,25 @@
 {
 "experiments": [
     {
-        "name":"symmetric-2-core",
+        "name":"migrationSota-3-core",
         "output_dir":"./txt_out/blackscholes/",
         "runs": [
+               {
+            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-04_12.28_4.0GHz+fixedFreq+slowDVFS+coldestCore_parsec-blackscholes-simsmall-2",
+            "name": "0"
+        },
+       
         {
             "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_10.26_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-blackscholes-simsmall-2--good1",
             "name": "1"
         },
         {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_11.39_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-blackscholes-simsmall-2",
+            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_04.59_4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
             "name": "2"
         },
         {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_12.00_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-blackscholes-simsmall-2",
-            "name": "3"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_14.31_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-streamcluster-simsmall-2",
-            "name": "4"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_04.59_4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
-            "name": "5"
-        },
-        {
             "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_17.13_4.0GHz+migrationSota+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
-            "name": "6"
+            "name": "3"
         }
         ]
     }]

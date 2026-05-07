@@ -6,6 +6,7 @@ import io
 import json
 from resultlib import get_active_cores
 from resultlib import get_ips_traces
+from resultlib import get_utilization_traces
 
 core_names =["C_0","C_1","C_2","C_3"]
 num_cores = 4
@@ -38,6 +39,35 @@ def get_average_response_time(run):
             m = re.search(r'Average Response Time \(ns\)\s+:\s+(\d+)', line)
             if m is not None:
                 return int(m.group(1))
+
+def get_individual_response_times(run):
+    resp_times = {}
+    with _open_file(run, 'execution.log') as f:
+        for line in f:
+            m = re.search(r'Task (\d+) \(Response/Service/Wait\) Time \(ns\)\s+:\s+(\d+)\s+(\d+)\s+(\d+)', line)
+            if m is not None:
+                task = int(m.group(1))
+                resp = int(m.group(2))
+                resp_times[task] = resp
+    keys = sorted(resp_times.keys())
+    if len(keys) == 0:
+        return []
+    return [resp_times[task] for task in keys]
+
+def get_response_time(run):
+    """Get response time: max for mixed workloads, average for single task"""
+    # Check if it's a mixed workload by looking for comma in the task names
+    # Extract task portion from path (after the config part)
+    run_basename = os.path.basename(run)
+    # Pattern: results_DATE_CONFIG_TASKS
+    # Tasks contain comma for mixed workloads
+    if ',parsec-' in run_basename or ',splash2-' in run_basename:
+        # Mixed workload - use max response time
+        individual_times = get_individual_response_times(run)
+        return max(individual_times) if individual_times else get_average_response_time(run)
+    else:
+        # Single task - use average response time
+        return get_average_response_time(run)
 
 def get_num_cores(df):
     core_list = df.columns.tolist()
@@ -198,7 +228,7 @@ def create_resp_times_data_txt(runs,out_filename):
     f.write("Run resp_time\n")
 
     for run in runs:
-        rsp_time = get_average_response_time(run["path"])
+        rsp_time = get_response_time(run["path"])
         f.write(run["name"]+" {}".format(rsp_time)+"\n")
 
 # Take set of runs for an experiment and output a text file with energy consumption for each core and sum of all cores for each run
@@ -215,7 +245,7 @@ def create_energy_data_txt(runs,out_filename):
         for label, df_core in dfs:
             all_core_vals = pd.Series([])
             f.write(run["name"]+" ")
-            rsp_time = get_average_response_time(run["path"])
+            rsp_time = get_response_time(run["path"])
             time = rsp_time / 1e9
             for name in core_names:
                 dt = 1e-3  # 1 ms in seconds
@@ -257,6 +287,34 @@ def create_ips_data_txts(runs,out_filename):
         avg= float(worker_avg/count)/1e9
         f.write("{:.2f} ".format(avg))
         f.write("\n")
+
+def create_utilization_data_txts(runs,out_filename):
+    f = open(out_filename, "w")
+    f.write("Run "+core_names[0]+" "+core_names[1]+" "+core_names[2]+" "+core_names[3]+" avg_workers\n")
+    for run in runs:
+        f.write(run["name"]+" ")
+        active_cores = get_active_cores(run["path"])
+        traces = get_utilization_traces(run["path"])
+        worker_avg = 0
+        count = 0
+        
+        for core, trace in enumerate(traces):
+            if core in active_cores:
+                valid_trace = [value for value in trace if value is not None and value > 0]
+                if len(valid_trace) > 0:
+                    avg_util = sum(valid_trace) / len(valid_trace)
+                    f.write("{:.2f} ".format(avg_util * 100))  # Convert to percentage
+                    if core > 0:
+                        count += 1
+                        worker_avg += avg_util
+                else:
+                    f.write("0.00 ")
+            else:
+                f.write("0.00 ")
+        
+        avg_workers = (worker_avg / count * 100) if count > 0 else 0
+        f.write("{:.2f} ".format(avg_workers))
+        f.write("\n")
     
 def create_data(experiments):
     for experiment in experiments["experiments"]:
@@ -276,6 +334,7 @@ def create_data(experiments):
         create_energy_data_txt(runs,out_path+"energy-"+name+".txt")
         create_cpi_data_txts(runs,out_path+"cpi-"+name+".txt")
         create_ips_data_txts(runs,out_path+"ips-"+name+".txt")
+        create_utilization_data_txts(runs,out_path+"utilization-"+name+".txt")
 
         #create_cpi_stack_data(runs,out_path+"cpi-"+name+".txt")
 

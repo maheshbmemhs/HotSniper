@@ -57,13 +57,12 @@ std::unordered_map<float,NeighborPrediction::core_status> NeighborPrediction::ge
     std::string nearest_benchmark;
     float min = std::numeric_limits<float>::max();
     for(auto s:statuses){
-        float diff = fabs(s.ips-ips); //fabs
+        float diff = fabs(s.ips-ips);
         if(diff<min){
             nearest_benchmark= s.benchmarkName;
             min = diff;
         }
     }
-    // std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
+    std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
     return benchmarks[nearest_benchmark];
 }
-

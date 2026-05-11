@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <iostream>
 #include <queue>
+#include <algorithm>
 
 DynThreadMapping_dvfs::DynThreadMapping_dvfs(const PerformanceCounters *performanceCounters, 
                                    int coreRows, 
@@ -45,6 +46,15 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
         }
         std::cout<<std::endl;
 
+        // Non-Parallel Region
+        if(std::count(activeCores.begin(), activeCores.end(), true)==1){
+            std::cout << "[Scheduler][DynThreadMapping_dvfs]: Non-Parallel region, setting inactive cores to lowest frequency and active core to 2.0 Ghz" << std::endl;
+            std::vector<int> newFrequencies(coreRows * coreColumns,core_states[0]);
+            newFrequencies[std::distance(std::begin(activeCores), std::find(activeCores.begin(), activeCores.end(),true))]=2000; // Set only active core to 2 GHz
+            return newFrequencies;
+        }
+
+        // Start all frequencies at the lowest
         std::vector<int> newFrequencies(coreRows * coreColumns,core_states[0]*1000);
 
         // Tracks the index into core_state, used to increment between states
@@ -52,14 +62,22 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
         
         // Get Predictions for each of the active cores
         std::vector<NeighborPrediction::PredictionMap> predictions;
+
         for(int i =0;i<(coreRows * coreColumns);i++){
             if(activeCores.at(i)){
                 float current_ips = getMeasuredIPSBillions(i);
-                if(current_ips <= 0.0){
-                    std::cout << "[Scheduler][DynThreadMapping_dvfs]: Warning IPS of core "<<i<<" is zero"<< std::endl;
+                // Thread is doing next to nothing, give it predictions that make it ignored in any moves
+                if(current_ips <= 0.1){
+                    std::cout << "[Scheduler][DynThreadMapping_dvfs]: Warning IPS of core "<<i<<" is near zero, using ignored predictions"<< std::endl;
+                    NeighborPrediction::PredictionMap temp;
+                    for(float state: core_states){
+                        temp.emplace(state,NeighborPrediction::core_status{"none",0.0f,0.0f,0.0f,0.0f,0.0f});
+                    }
+                    predictions.push_back(temp);
+                } else{
+                    float current_state = float(oldFrequencies[i])/1000.0f; // Mhz to GHz
+                    predictions.push_back(pred.getNearestBenchmark(current_state,current_ips));
                 }
-                float current_state = float(oldFrequencies[i])/1000.0f;
-                predictions.push_back(pred.getNearestBenchmark(current_state,current_ips));
             }else{
                 predictions.push_back({});
             }
@@ -82,8 +100,6 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
             std::cout << "[Scheduler][DynThreadMapping_dvfs]: Completed DVFS"<< std::endl;
         }
         std::cout << "[Scheduler][DynThreadMapping_dvfs]: Final States "<< std::endl;
-        currentStatesIdx[0] = 2; // Fix core 0 for main thread
-        //currentStatesIdx[2] = 2; // Fix core 2 for main thread
 
         // Update core frequency
         for(int i=0;i<(coreRows * coreColumns);i++){
@@ -100,10 +116,7 @@ DynThreadMapping_dvfs::Move DynThreadMapping_dvfs::get_best_move(const std::vect
                                                                  const std::vector<bool>& activeCores){
     Move best_move;
     float best_score = 0.0;
-    for(int i = 1;i<currentStatesIdx.size(); i++){
-        //if(i==2){
-            //continue;
-        //}
+    for(int i = 0;i<currentStatesIdx.size(); i++){
         if(activeCores.at(i)){
             // Cant go any higher than this state
             if(currentStatesIdx[i]+1 >= core_states.size()){
@@ -161,10 +174,7 @@ bool DynThreadMapping_dvfs::checkConstraints(const std::vector<NeighborPredictio
                                              const std::vector<int>& currentStateIdx, 
                                              const std::vector<bool>& activeCores){
     float total_ips = 0.0f;
-    for (unsigned int coreCounter = 1; coreCounter < coreRows * coreColumns; coreCounter++) {
-        //if(coreCounter==2){
-        //    continue;
-        //}
+    for (unsigned int coreCounter = 0; coreCounter < coreRows * coreColumns; coreCounter++) {
         if(activeCores.at(coreCounter)){
             auto prediction = predictions[coreCounter];
             float new_clock_speed = core_states[currentStateIdx[coreCounter]];

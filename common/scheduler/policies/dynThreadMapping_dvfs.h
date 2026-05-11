@@ -15,7 +15,7 @@ DynThreadMapping_dvfs(const PerformanceCounters *performanceCounters,
                 int coreColumns, 
                 std::string profile_path,
                 std::string thermal_model_path,
-                float target_ips,
+                float temperature_constraint,
                 std::vector<float> core_states,
                 float dtmCriticalTemperature, 
                 float dtmRecoveredTemperature);
@@ -28,7 +28,7 @@ private:
     const PerformanceCounters *performanceCounters{nullptr};
     unsigned int coreRows{0};
     unsigned int coreColumns{0};
-    float target_ips{0.0f};
+    float temperature_constraint{0.0f};
     std::vector<float> core_states;
     NeighborPrediction pred;
     ThermalRegressionModel thermal_model;

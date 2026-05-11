@@ -16,19 +16,27 @@ public:
         std::vector<double> startCpis;
         std::vector<double> startRelNucaCpis;
         std::vector<double> startIps;
+        double startPeakTempC{-1.0};
     };
 
     explicit ThermalRegressionModel(const std::string& modelPath);
 
-    std::vector<double> predictEndTemperatures(const Inputs& inputs) const;
+    std::vector<double> predictEndTemperatures(const Inputs& inputs);
 
     unsigned int getNumCores() const { return numCores; }
+    bool isEnabled() const { return enabled; }
+    void setDebug(bool debugEnabled) { debug = debugEnabled; }
 
 private:
+    bool enabled{false};
+    bool phaseAware{false};
+    bool usesPhaseInteractions{false};
+    bool debug{false};
     unsigned int numCores{0};
     unsigned int numFeatures{0};
     unsigned int numTargets{0};
 
+    std::vector<std::string> phaseNames;
     std::vector<std::string> featureNames;
     std::vector<std::string> targetNames;
     std::vector<double> xMean;
@@ -38,7 +46,12 @@ private:
     std::vector<std::vector<double> > coefficients;
     std::vector<double> intercept;
 
-    std::vector<double> buildFeatures(const Inputs& inputs) const;
+    void loadV1(std::ifstream& file);
+    void loadV2PhaseAware(std::ifstream& file);
+    void validateModel() const;
+    void disable(const std::string& reason);
+
+    std::vector<double> buildFeatures(const Inputs& inputs, std::string* classifiedPhase = nullptr) const;
     void validateInputs(const Inputs& inputs) const;
 };
 

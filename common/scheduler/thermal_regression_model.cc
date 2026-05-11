@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <numeric>
 #include <stdexcept>
+#include <sstream>
 
 namespace {
 
@@ -32,6 +34,42 @@ unsigned int readLabeledUInt(std::ifstream& file, const std::string& label)
 std::vector<std::string> readNames(std::ifstream& file, const std::string& label, unsigned int count)
 {
     readToken(file, label);
+    std::vector<std::string> names;
+    names.reserve(count);
+    for (unsigned int i = 0; i < count; i++) {
+        std::string name;
+        file >> name;
+        if (!file) {
+            throw std::runtime_error("Thermal regression model parse error while reading " + label);
+        }
+        names.push_back(name);
+    }
+    return names;
+}
+
+std::vector<std::string> readNamesUntilLabel(
+    std::ifstream& file,
+    const std::string& label,
+    const std::string& endLabel)
+{
+    readToken(file, label);
+    std::vector<std::string> names;
+    while (true) {
+        std::string name;
+        file >> name;
+        if (!file) {
+            throw std::runtime_error("Thermal regression model parse error while reading " + label);
+        }
+        if (name == endLabel) {
+            break;
+        }
+        names.push_back(name);
+    }
+    return names;
+}
+
+std::vector<std::string> readNamesAfterLabel(std::ifstream& file, const std::string& label, unsigned int count)
+{
     std::vector<std::string> names;
     names.reserve(count);
     for (unsigned int i = 0; i < count; i++) {
@@ -127,16 +165,141 @@ void requireSize(const std::vector<double>& values, unsigned int expected, const
     }
 }
 
+std::string classifyPhase(const std::vector<double>& startUtil)
+{
+    bool hasTransition = false;
+    for (double util : startUtil) {
+        if (util >= 0.01 && util <= 0.30) {
+            hasTransition = true;
+            break;
+        }
+    }
+    if (hasTransition) {
+        return "transition";
+    }
+
+    std::vector<bool> active(startUtil.size(), false);
+    unsigned int totalActive = 0;
+    for (unsigned int i = 0; i < startUtil.size(); i++) {
+        active[i] = startUtil[i] > 0.30;
+        if (active[i]) {
+            totalActive++;
+        }
+    }
+
+    const bool masterActive = !active.empty() && active[0];
+    unsigned int workerCount = 0;
+    for (unsigned int i = 1; i < active.size(); i++) {
+        if (active[i]) {
+            workerCount++;
+        }
+    }
+
+    if (totalActive == 0) {
+        return "idle";
+    }
+    if (masterActive && workerCount == 0) {
+        return "master_only";
+    }
+    if (!masterActive && workerCount > 0) {
+        return "workers_only";
+    }
+    if (masterActive && workerCount > 0) {
+        return "full_parallel";
+    }
+    return "mixed";
+}
+
+bool hasPhase(const std::vector<std::string>& phaseNames, const std::string& phase)
+{
+    return std::find(phaseNames.begin(), phaseNames.end(), phase) != phaseNames.end();
+}
+
+std::string classifyPhaseForModel(
+    const std::vector<double>& startUtil,
+    const std::vector<std::string>& phaseNames)
+{
+    if (phaseNames.size() == 2
+        && phaseNames[0] == "master_only"
+        && phaseNames[1] == "workers_only") {
+        unsigned int workerCount = 0;
+        for (unsigned int i = 1; i < startUtil.size(); i++) {
+            if (startUtil[i] > 0.30) {
+                workerCount++;
+            }
+        }
+        return workerCount > 0 ? "workers_only" : "master_only";
+    }
+
+    const std::string phase = classifyPhase(startUtil);
+    if (hasPhase(phaseNames, phase)) {
+        return phase;
+    }
+
+    if (hasPhase(phaseNames, "workers_only")) {
+        for (unsigned int i = 1; i < startUtil.size(); i++) {
+            if (startUtil[i] > 0.30) {
+                return "workers_only";
+            }
+        }
+    }
+
+    if (hasPhase(phaseNames, "master_only")) {
+        return "master_only";
+    }
+
+    return phaseNames.empty() ? phase : phaseNames[0];
+}
+
+std::string joinDoublesForLog(const std::vector<double>& values)
+{
+    std::ostringstream out;
+    for (unsigned int i = 0; i < values.size(); i++) {
+        if (i != 0) {
+            out << ";";
+        }
+        out << values[i];
+    }
+    return out.str();
+}
+
 }
 
 ThermalRegressionModel::ThermalRegressionModel(const std::string& modelPath)
 {
-    std::ifstream file(modelPath.c_str());
-    if (!file) {
-        throw std::runtime_error("Could not open thermal regression model: " + modelPath);
-    }
+    try {
+        std::ifstream file(modelPath.c_str());
+        if (!file) {
+            throw std::runtime_error("Could not open thermal regression model: " + modelPath);
+        }
 
-    readToken(file, "THERMAL_REGRESSION_MODEL_V1");
+        std::string header;
+        file >> header;
+        if (!file) {
+            throw std::runtime_error("Thermal regression model parse error: empty model file");
+        }
+
+        if (header == "THERMAL_REGRESSION_MODEL_V1") {
+            loadV1(file);
+        } else if (header == "THERMAL_REGRESSION_MODEL_V2_PHASE_AWARE") {
+            loadV2PhaseAware(file);
+        } else {
+            throw std::runtime_error("Unsupported thermal regression model header: " + header);
+        }
+
+        validateModel();
+        enabled = true;
+    } catch (const std::exception& e) {
+        disable(e.what());
+    }
+}
+
+void ThermalRegressionModel::loadV1(std::ifstream& file)
+{
+    phaseAware = false;
+    usesPhaseInteractions = false;
+    phaseNames.clear();
+
     numCores = readLabeledUInt(file, "num_cores");
     numFeatures = readLabeledUInt(file, "num_features");
     numTargets = readLabeledUInt(file, "num_targets");
@@ -162,17 +325,128 @@ ThermalRegressionModel::ThermalRegressionModel(const std::string& modelPath)
     intercept = readVector(file, "intercept", numTargets);
 
     if (numTargets != numCores) {
-        throw std::runtime_error("Thermal regression model must have one temperature target per core");
+        throw std::runtime_error("Thermal regression V1 model must have one temperature target per core");
     }
 }
 
-std::vector<double> ThermalRegressionModel::predictEndTemperatures(const Inputs& inputs) const
+void ThermalRegressionModel::loadV2PhaseAware(std::ifstream& file)
 {
-    validateInputs(inputs);
+    phaseAware = true;
+    numCores = readLabeledUInt(file, "num_cores");
+    numFeatures = readLabeledUInt(file, "num_features");
+    numTargets = readLabeledUInt(file, "num_targets");
+    usesPhaseInteractions = readLabeledUInt(file, "uses_phase_interactions") != 0;
 
-    const std::vector<double> features = buildFeatures(inputs);
-    if (features.size() != numFeatures) {
-        throw std::runtime_error("Thermal regression feature count mismatch");
+    phaseNames = readNamesUntilLabel(file, "phase_names", "feature_names");
+    featureNames = readNamesAfterLabel(file, "feature_names", numFeatures);
+    targetNames = readNames(file, "target_names", numTargets);
+    xMean = readVector(file, "x_mean", numFeatures);
+    xScale = readVector(file, "x_scale", numFeatures);
+    yMean = readVector(file, "y_mean", numTargets);
+    yScale = readVector(file, "y_scale", numTargets);
+
+    readToken(file, "coef");
+    coefficients.assign(numTargets, std::vector<double>(numFeatures, 0.0));
+    for (unsigned int target = 0; target < numTargets; target++) {
+        for (unsigned int feature = 0; feature < numFeatures; feature++) {
+            file >> coefficients[target][feature];
+            if (!file) {
+                throw std::runtime_error("Thermal regression model parse error while reading coefficients");
+            }
+        }
+    }
+
+    intercept = readVector(file, "intercept", numTargets);
+
+    if (phaseNames.empty()) {
+        throw std::runtime_error("Thermal regression V2 model must contain at least one phase name");
+    }
+}
+
+void ThermalRegressionModel::validateModel() const
+{
+    if (numCores != 4) {
+        throw std::runtime_error("Thermal regression model num_cores must be 4");
+    }
+    if (numTargets != 4) {
+        throw std::runtime_error("Thermal regression model num_targets must be 4");
+    }
+    if (featureNames.size() != numFeatures) {
+        throw std::runtime_error("Thermal regression model feature_names length does not match num_features");
+    }
+    if (targetNames.size() != numTargets) {
+        throw std::runtime_error("Thermal regression model target_names length does not match num_targets");
+    }
+    if (xMean.size() != numFeatures) {
+        throw std::runtime_error("Thermal regression model x_mean length does not match num_features");
+    }
+    if (xScale.size() != numFeatures) {
+        throw std::runtime_error("Thermal regression model x_scale length does not match num_features");
+    }
+    if (yMean.size() != numTargets) {
+        throw std::runtime_error("Thermal regression model y_mean length does not match num_targets");
+    }
+    if (yScale.size() != numTargets) {
+        throw std::runtime_error("Thermal regression model y_scale length does not match num_targets");
+    }
+    if (coefficients.size() != numTargets) {
+        throw std::runtime_error("Thermal regression model coefficient row count does not match num_targets");
+    }
+    for (unsigned int target = 0; target < coefficients.size(); target++) {
+        if (coefficients[target].size() != numFeatures) {
+            throw std::runtime_error("Thermal regression model coefficient column count does not match num_features");
+        }
+    }
+    if (intercept.size() != numTargets) {
+        throw std::runtime_error("Thermal regression model intercept length does not match num_targets");
+    }
+    if (phaseAware && phaseNames.empty()) {
+        throw std::runtime_error("Thermal regression phase-aware model has no phase_names");
+    }
+}
+
+void ThermalRegressionModel::disable(const std::string& reason)
+{
+    enabled = false;
+    phaseAware = false;
+    usesPhaseInteractions = false;
+    numCores = 0;
+    numFeatures = 0;
+    numTargets = 0;
+    phaseNames.clear();
+    featureNames.clear();
+    targetNames.clear();
+    xMean.clear();
+    xScale.clear();
+    yMean.clear();
+    yScale.clear();
+    coefficients.clear();
+    intercept.clear();
+
+    std::cerr << "[ThermalRegressionModel]: warning: disabling ML thermal predictor: "
+              << reason << std::endl;
+}
+
+std::vector<double> ThermalRegressionModel::predictEndTemperatures(const Inputs& inputs)
+{
+    if (!enabled) {
+        return inputs.startTempsC;
+    }
+
+    std::string classifiedPhase;
+    std::vector<double> features;
+    try {
+        validateInputs(inputs);
+        features = buildFeatures(inputs, &classifiedPhase);
+        if (features.size() != numFeatures) {
+            std::ostringstream out;
+            out << "Thermal regression feature count mismatch: constructed "
+                << features.size() << ", expected " << numFeatures;
+            throw std::runtime_error(out.str());
+        }
+    } catch (const std::exception& e) {
+        disable(e.what());
+        return inputs.startTempsC;
     }
 
     std::vector<double> scaledFeatures(numFeatures, 0.0);
@@ -194,6 +468,16 @@ std::vector<double> ThermalRegressionModel::predictEndTemperatures(const Inputs&
     for (unsigned int core = 0; core < numCores; core++) {
         endTemperatures[core] = inputs.startTempsC[core] + outputs[core];
     }
+
+    if (debug) {
+        std::cout << "[ThermalRegressionModel]: phase="
+                  << (classifiedPhase.empty() ? "none" : classifiedPhase)
+                  << " feature_count=" << features.size()
+                  << " predicted_delta_temps_c=" << joinDoublesForLog(outputs)
+                  << " predicted_end_temps_c=" << joinDoublesForLog(endTemperatures)
+                  << std::endl;
+    }
+
     return endTemperatures;
 }
 
@@ -210,7 +494,7 @@ void ThermalRegressionModel::validateInputs(const Inputs& inputs) const
     requireSize(inputs.startIps, numCores, "startIps");
 }
 
-std::vector<double> ThermalRegressionModel::buildFeatures(const Inputs& inputs) const
+std::vector<double> ThermalRegressionModel::buildFeatures(const Inputs& inputs, std::string* classifiedPhase) const
 {
     const unsigned int n = numCores;
 
@@ -231,7 +515,9 @@ std::vector<double> ThermalRegressionModel::buildFeatures(const Inputs& inputs) 
     const std::vector<double> startIpc = cpiToIpc(inputs.startCpis);
     const std::vector<double> logStartIps = safeLogIps(inputs.startIps);
 
-    const double startPeak = *std::max_element(startTemp.begin(), startTemp.end());
+    const double startPeak = (inputs.startPeakTempC >= 0.0)
+        ? inputs.startPeakTempC
+        : *std::max_element(startTemp.begin(), startTemp.end());
 
     std::vector<double> tempCentered(n);
     std::vector<double> tempToPeak(n);
@@ -334,6 +620,29 @@ std::vector<double> ThermalRegressionModel::buildFeatures(const Inputs& inputs) 
     addVectorFeatures(features, tempPowerInteraction);
     addVectorFeatures(features, tempFreqInteraction);
     addVectorFeatures(features, tempWorkInteraction);
+
+    if (phaseAware) {
+        const std::vector<double> baseFeatures(features);
+        const std::string phase = classifyPhaseForModel(startUtil, phaseNames);
+        if (classifiedPhase != nullptr) {
+            *classifiedPhase = phase;
+        }
+
+        for (const std::string& phaseName : phaseNames) {
+            features.push_back(phase == phaseName ? 1.0 : 0.0);
+        }
+
+        if (usesPhaseInteractions) {
+            for (const std::string& phaseName : phaseNames) {
+                const double flag = (phase == phaseName) ? 1.0 : 0.0;
+                for (double value : baseFeatures) {
+                    features.push_back(flag * value);
+                }
+            }
+        }
+    } else if (classifiedPhase != nullptr) {
+        *classifiedPhase = "";
+    }
 
     return features;
 }

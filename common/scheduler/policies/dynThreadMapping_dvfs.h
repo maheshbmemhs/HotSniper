@@ -1,12 +1,11 @@
 #ifndef __DYN_THREAD_MAPPING_H
 #define __DYN_THREAD_MAPPING_H
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 #include "dvfspolicy.h"
 #include "performance_counters.h"
-#include "neighbor_prediction.h"
-#include "thermal_regression_model.h"
 
 class DynThreadMapping_dvfs : public DVFSPolicy {
 public:
@@ -28,10 +27,9 @@ private:
     const PerformanceCounters *performanceCounters{nullptr};
     unsigned int coreRows{0};
     unsigned int coreColumns{0};
-    float temperature_constraint{0.0f};
     std::vector<float> core_states;
-    NeighborPrediction pred;
-    ThermalRegressionModel thermal_model;
+    std::mt19937 random_engine;
+    std::vector<int> random_frequency_choices;
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
     bool in_throttle_mode = false;
@@ -83,8 +81,6 @@ private:
     std::string joinTemperatures(const std::vector<double>& values) const;
     std::string joinDoubles(const std::vector<double>& values) const;
     std::string csvEscape(const std::string& value) const;
-
-    double getMeasuredIPSBillions(unsigned int coreId);
 
 };
 #endif

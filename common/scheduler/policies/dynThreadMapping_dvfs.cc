@@ -1,16 +1,19 @@
 #include "dynThreadMapping_dvfs.h"
 #include "config.hpp"
 #include "simulator.h"
+#include <algorithm>
 #include <iomanip>
 #include <cstdlib>
+#include <cmath>
+#include <functional>
 #include <iostream>
-#include <queue>
 #include <sstream>
 
 DynThreadMapping_dvfs::DynThreadMapping_dvfs(const PerformanceCounters *performanceCounters, 
                                    int coreRows, 
                                    int coreColumns, 
                                    std::string profile_path,
+                                   std::string thermal_model_path,
                                    float target_ips_,
                                    std::vector<float> core_states_,
                                    float dtmCriticalTemperature, 
@@ -21,12 +24,9 @@ coreColumns(coreColumns),
 target_ips(target_ips_),
 core_states(core_states_),
 pred(profile_path),
+thermal_model(thermal_model_path),
 dtmCriticalTemperature(dtmCriticalTemperature),
-dtmRecoveredTemperature(dtmRecoveredTemperature),
-random_frequency_choices{1000, 1500, 2000, 2500, 3000} {
-    std::random_device rd;
-    random_engine.seed(rd());
-
+dtmRecoveredTemperature(dtmRecoveredTemperature) {
     std::string output_dir = ".";
     experiment_name = "unknown";
     const char *benchmarks_root = std::getenv("BENCHMARKS_ROOT");
@@ -76,6 +76,7 @@ random_frequency_choices{1000, 1500, 2000, 2500, 3000} {
     std::cout << "[Scheduler][DynThreadMapping_dvfs]: Initializing with: "
     << "target IPS: "<< target_ips_ 
     << "\n profile path: " << profile_path
+    << "\n thermal model path: " << thermal_model_path
     << "\n critical temp: " << dtmCriticalTemperature
     << "\n recovery temp: " << dtmRecoveredTemperature
     << "\n states: " << s_core_states << "]"
@@ -115,29 +116,189 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
             minFrequencies,
             activeCores);
         return minFrequencies;
-    } else {
-        std::cout << "[Scheduler][DynThreadMapping_dvfs]: Random DVFS sample at peak T="
-                  << std::fixed << std::setprecision(2) << current_peak_temp << " C" << std::endl;
-        std::vector<int> newFrequencies(coreRows * coreColumns, random_frequency_choices[0]);
-        std::uniform_int_distribution<size_t> pick(0, random_frequency_choices.size() - 1);
-        for(unsigned int i=0;i<(coreRows * coreColumns);i++){
-            newFrequencies[i] = random_frequency_choices[pick(random_engine)];
-            std::cout << "[Scheduler][DynThreadMapping_dvfs]: core "<< i
-                      << ": random freq "<< newFrequencies[i] << " MHz" << std::endl;
-        }
-        rememberCycle(
-            current_peak_temp,
-            current_core_temps,
-            current_core_powers,
-            current_core_utils,
-            current_core_cpis,
-            current_core_rel_nuca_cpis,
-            current_core_ips,
-            oldFrequencies,
-            newFrequencies,
-            activeCores);
-        return newFrequencies;
     }
+
+    const unsigned int numCores = coreRows * coreColumns;
+    if (thermal_model.getNumCores() != numCores) {
+        std::cerr << "[Scheduler][DynThreadMapping_dvfs]: thermal model core count "
+                  << thermal_model.getNumCores() << " does not match system core count "
+                  << numCores << std::endl;
+        return oldFrequencies;
+    }
+
+    std::vector<NeighborPrediction::PredictionMap> predictions(numCores);
+    for (unsigned int core = 0; core < numCores; core++) {
+        std::cout << "!!!" << core << activeCores.at(core) << std::endl;
+        if (!activeCores.at(core)) {
+            continue;
+        }
+
+        const float current_state = oldFrequencies.at(core) / 1000.0f;
+        const float current_ips = getMeasuredIPSBillions(core);
+        predictions[core] = pred.getNearestBenchmark(current_state, current_ips);
+    }
+
+    struct Candidate {
+        bool valid;
+        std::vector<int> frequencies;
+        double total_ips;
+        double total_power;
+        double peak_temperature;
+
+        Candidate() : valid(false), total_ips(0.0), total_power(0.0), peak_temperature(0.0) {}
+    };
+
+    auto buildInputs = [&](const std::vector<int>& frequencies) -> ThermalRegressionModel::Inputs {
+        ThermalRegressionModel::Inputs inputs;
+        inputs.oldFrequenciesMhz.reserve(numCores);
+        inputs.newFrequenciesMhz.reserve(numCores);
+        inputs.activeCores.reserve(numCores);
+
+        for (unsigned int core = 0; core < numCores; core++) {
+            inputs.oldFrequenciesMhz.push_back(oldFrequencies.at(core));
+            inputs.newFrequenciesMhz.push_back(frequencies.at(core));
+            inputs.activeCores.push_back(activeCores.at(core) ? 1.0 : 0.0);
+        }
+
+        inputs.startTempsC = current_core_temps;
+        inputs.startPowersW = current_core_powers;
+        inputs.startUtilizations = current_core_utils;
+        inputs.startCpis = current_core_cpis;
+        inputs.startRelNucaCpis = current_core_rel_nuca_cpis;
+        inputs.startIps = current_core_ips;
+        return inputs;
+    };
+
+    auto evaluateCandidate = [&](const std::vector<int>& stateIndices) -> Candidate {
+        Candidate candidate;
+        candidate.valid = true;
+        candidate.frequencies.assign(numCores, static_cast<int>(std::round(core_states[0] * 1000.0f)));
+
+        for (unsigned int core = 0; core < numCores; core++) {
+            const int stateIndex = activeCores.at(core) ? stateIndices.at(core) : 0;
+            const float freqGhz = core_states.at(stateIndex);
+            candidate.frequencies[core] = static_cast<int>(std::round(freqGhz * 1000.0f));
+
+            if (activeCores.at(core)) {
+                auto status = predictions[core].find(freqGhz);
+                if (status == predictions[core].end()) {
+                    candidate.valid = false;
+                    return candidate;
+                }
+
+                candidate.total_ips += status->second.ips;
+                candidate.total_power += status->second.power;
+            } else {
+                candidate.total_power += current_core_powers.at(core);
+            }
+        }
+
+        const std::vector<double> predictedTemps = thermal_model.predictEndTemperatures(buildInputs(candidate.frequencies));
+        candidate.peak_temperature = *std::max_element(predictedTemps.begin(), predictedTemps.end());
+        return candidate;
+    };
+
+    auto betterFeasible = [](const Candidate& candidate, const Candidate& best) -> bool {
+        if (!best.valid) {
+            return true;
+        }
+        if (candidate.total_power != best.total_power) {
+            return candidate.total_power < best.total_power;
+        }
+        if (candidate.peak_temperature != best.peak_temperature) {
+            return candidate.peak_temperature < best.peak_temperature;
+        }
+        return candidate.total_ips > best.total_ips;
+    };
+
+    auto betterThermalFallback = [](const Candidate& candidate, const Candidate& best) -> bool {
+        if (!best.valid) {
+            return true;
+        }
+        if (candidate.total_ips != best.total_ips) {
+            return candidate.total_ips > best.total_ips;
+        }
+        if (candidate.peak_temperature != best.peak_temperature) {
+            return candidate.peak_temperature < best.peak_temperature;
+        }
+        return candidate.total_power < best.total_power;
+    };
+
+    Candidate bestFeasible;
+    Candidate bestThermalFallback;
+    std::vector<int> stateIndices(numCores, 0);
+
+    std::function<void(unsigned int)> enumerate = [&](unsigned int core) {
+        if (core == numCores) {
+            const Candidate candidate = evaluateCandidate(stateIndices);
+            if (!candidate.valid) {
+                return;
+            }
+
+            const bool thermallySafe = candidate.peak_temperature <= dtmCriticalTemperature;
+            if (thermallySafe && betterThermalFallback(candidate, bestThermalFallback)) {
+                bestThermalFallback = candidate;
+            }
+
+            if (thermallySafe && candidate.total_ips >= target_ips && betterFeasible(candidate, bestFeasible)) {
+                bestFeasible = candidate;
+            }
+            return;
+        }
+
+        if (!activeCores.at(core)) {
+            stateIndices[core] = 0;
+            enumerate(core + 1);
+            return;
+        }
+
+        for (unsigned int state = 0; state < core_states.size(); state++) {
+            stateIndices[core] = state;
+            enumerate(core + 1);
+        }
+    };
+
+    enumerate(0);
+
+    Candidate chosen;
+    if (bestFeasible.valid) {
+        chosen = bestFeasible;
+        std::cout << "[Scheduler][DynThreadMapping_dvfs]: selected profile+ML frequencies"
+                  << " predicted_ips=" << std::fixed << std::setprecision(3) << chosen.total_ips
+                  << " predicted_peak_temp=" << std::fixed << std::setprecision(2) << chosen.peak_temperature
+                  << " C predicted_power=" << std::fixed << std::setprecision(3) << chosen.total_power
+                  << " W" << std::endl;
+    } else if (bestThermalFallback.valid) {
+        chosen = bestThermalFallback;
+        std::cout << "[Scheduler][DynThreadMapping_dvfs]: no candidate met target IPS under thermal limit; "
+                  << "using best thermal-safe candidate"
+                  << " predicted_ips=" << std::fixed << std::setprecision(3) << chosen.total_ips
+                  << " predicted_peak_temp=" << std::fixed << std::setprecision(2) << chosen.peak_temperature
+                  << " C" << std::endl;
+    } else {
+        chosen.valid = true;
+        chosen.frequencies.assign(numCores, static_cast<int>(std::round(core_states[0] * 1000.0f)));
+        std::cout << "[Scheduler][DynThreadMapping_dvfs]: no thermally safe candidate found; "
+                  << "returning min. frequencies" << std::endl;
+    }
+
+    for(unsigned int i = 0; i < numCores; i++){
+        std::cout << "[Scheduler][DynThreadMapping_dvfs]: core "<< i
+                  << ": selected freq "<< chosen.frequencies[i] << " MHz" << std::endl;
+    }
+
+    rememberCycle(
+        current_peak_temp,
+        current_core_temps,
+        current_core_powers,
+        current_core_utils,
+        current_core_cpis,
+        current_core_rel_nuca_cpis,
+        current_core_ips,
+        oldFrequencies,
+        chosen.frequencies,
+        activeCores);
+    return chosen.frequencies;
 }
 
 std::vector<double> DynThreadMapping_dvfs::getCoreTemperatures() const {
@@ -299,52 +460,6 @@ std::string DynThreadMapping_dvfs::csvEscape(const std::string& value) const {
     return escaped;
 }
 
-DynThreadMapping_dvfs::Move DynThreadMapping_dvfs::get_best_move(const std::vector<NeighborPrediction::PredictionMap>& predictions,
-                                                                 const std::vector<int>& currentStatesIdx,
-                                                                 const std::vector<bool>& activeCores){
-    Move best_move;
-    float best_score = 0.0;
-    for(int i = 1;i<currentStatesIdx.size(); i++){
-        //if(i==2){
-            //continue;
-        //}
-        if(activeCores.at(i)){
-            // Cant go any higher than this state
-            if(currentStatesIdx[i]+1 >= core_states.size()){
-                continue;
-            }
-            // Get prediction for core i        
-            auto prediction = predictions[i];
-
-            // Calculate Move
-            // Current IPS and power values
-            float current_state = core_states[currentStatesIdx[i]];
-            float ips_before = prediction[current_state].ips;
-            float power_before = prediction[current_state].power;
-
-            // Potential IPS and Power values of next state
-            float new_state = core_states[currentStatesIdx[i]+1]; // next state is just current for core i plus 1
-            float ips_after = prediction[new_state].ips;   
-            float power_after = prediction[new_state].power;   
-            
-            double delta_ips = ips_after-ips_before;
-            double delta_power = power_after-power_before;
-            if (delta_power <= 0.0 || delta_ips <= 0.0) {
-                continue;
-            }
-
-            double score =delta_ips/delta_power;
-            if(score>best_score){
-                // Best move seen so far
-                best_move = Move(i,currentStatesIdx[i],currentStatesIdx[i]+1,delta_ips,delta_power,score);
-                best_score=score;
-            }
-        }
-    }
-    return best_move;
-}
-
-
 double DynThreadMapping_dvfs::getMeasuredIPSBillions(unsigned int coreId) {
     if (performanceCounters == NULL) {
         return 0.0;
@@ -359,24 +474,6 @@ double DynThreadMapping_dvfs::getMeasuredIPSBillions(unsigned int coreId) {
     }
 
     return 0.0;
-}
-
-bool DynThreadMapping_dvfs::checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, 
-                                             const std::vector<int>& currentStateIdx, 
-                                             const std::vector<bool>& activeCores){
-    float total_ips = 0.0f;
-    for (unsigned int coreCounter = 1; coreCounter < coreRows * coreColumns; coreCounter++) {
-        //if(coreCounter==2){
-        //    continue;
-        //}
-        if(activeCores.at(coreCounter)){
-            auto prediction = predictions[coreCounter];
-            float new_clock_speed = core_states[currentStateIdx[coreCounter]];
-            total_ips+=prediction.at(new_clock_speed).ips;
-        }
-    }
-    std::cout << "[Scheduler][DynThreadMapping_dvfs]: Predicted IPS: "<<total_ips<< std::endl;
-    return total_ips>=target_ips;
 }
 
 bool DynThreadMapping_dvfs::throttle() {

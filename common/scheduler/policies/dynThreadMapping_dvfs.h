@@ -1,12 +1,12 @@
 #ifndef __DYN_THREAD_MAPPING_H
 #define __DYN_THREAD_MAPPING_H
 #include <fstream>
-#include <random>
 #include <string>
 #include <vector>
 #include "dvfspolicy.h"
 #include "performance_counters.h"
 #include "neighbor_prediction.h"
+#include "thermal_regression_model.h"
 
 class DynThreadMapping_dvfs : public DVFSPolicy {
 public:
@@ -14,36 +14,13 @@ DynThreadMapping_dvfs(const PerformanceCounters *performanceCounters,
                 int coreRows, 
                 int coreColumns, 
                 std::string profile_path,
+                std::string thermal_model_path,
                 float target_ips,
                 std::vector<float> core_states,
                 float dtmCriticalTemperature, 
                 float dtmRecoveredTemperature);
 
     virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies,const std::vector<bool> &activeCores);
-    
-    struct Move {
-        int core;
-        int from_state;
-        int to_state;
-
-        double delta_ips;
-        double delta_power;
-        double score;
-        Move(){
-            score=0.0f;
-        }
-        Move(int core_, int from, int to, double d_ips, double d_pow, double score_)
-            : core(core_),
-            from_state(from),
-            to_state(to),
-            delta_ips(d_ips),
-            delta_power(d_pow),
-            score(score_) {}
-
-        friend bool operator<(const Move& a, const Move& b) {
-            return a.score < b.score;
-        }
-    };
 
 private:
     
@@ -54,12 +31,11 @@ private:
     float target_ips{0.0f};
     std::vector<float> core_states;
     NeighborPrediction pred;
+    ThermalRegressionModel thermal_model;
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
     bool in_throttle_mode = false;
     bool throttle();
-    std::vector<int> random_frequency_choices;
-    std::mt19937 random_engine;
 
     std::ofstream sample_log;
     std::string experiment_name;
@@ -108,9 +84,6 @@ private:
     std::string joinDoubles(const std::vector<double>& values) const;
     std::string csvEscape(const std::string& value) const;
 
-    Move get_best_move(const std::vector<NeighborPrediction::PredictionMap>& predictions,const std::vector<int>& currentStatesIdx,const std::vector<bool> &activeCores);
-    void exchange();
-    bool checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, const std::vector<int>& newFrequencies, const std::vector<bool> &activeCores);
     double getMeasuredIPSBillions(unsigned int coreId);
 
 };

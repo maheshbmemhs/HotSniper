@@ -1,12 +1,13 @@
 import argparse
 import math
+import os
 from dataclasses import dataclass
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import LinearRegression, Ridge, RidgeCV
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
@@ -43,7 +44,7 @@ def parse_vec(value, expected_len=NUM_CORES, colname=""):
 def safe_log_ips(ips):
     """
     IPS can be negative in startup artifacts, and inactive cores can have tiny IPS.
-    We clip negative values to 0 and predict log10(IPS + 1).
+    We clip negative values to 0 and use log10(IPS + 1) as an input feature.
     """
     ips = np.asarray(ips, dtype=np.float32)
     ips = np.maximum(ips, 0.0)
@@ -104,7 +105,6 @@ def build_dataset(csv_path):
 
     required_cols = [
         "start_peak_temp_c",
-        "end_peak_temp_c",
         "old_frequencies_mhz",
         "new_frequencies_mhz",
         "active_cores",
@@ -115,7 +115,6 @@ def build_dataset(csv_path):
         "start_core_cpis",
         "start_core_rel_nuca_cpis",
         "start_core_ips",
-        "end_core_ips",
     ]
 
     missing = [c for c in required_cols if c not in df.columns]
@@ -152,10 +151,8 @@ def build_dataset(csv_path):
         )
 
         start_ips = parse_vec(row["start_core_ips"], colname="start_core_ips")
-        end_ips = parse_vec(row["end_core_ips"], colname="end_core_ips")
 
         log_start_ips = safe_log_ips(start_ips)
-        log_end_ips = safe_log_ips(end_ips)
 
         start_peak = float(row["start_peak_temp_c"])
 
@@ -268,10 +265,8 @@ def build_dataset(csv_path):
 
         X = np.array(features, dtype=np.float32)
 
-        # Targets:
-        # first 4: delta temperature
-        # next 4: log10(end IPS + 1)
-        Y = np.concatenate([delta_temp, log_end_ips]).astype(np.float32)
+        # Target: per-core temperature delta for the next scheduler interval.
+        Y = delta_temp.astype(np.float32)
 
         X_rows.append(X)
         Y_rows.append(Y)
@@ -280,10 +275,7 @@ def build_dataset(csv_path):
         if feature_names is None:
             feature_names = names
 
-    target_names = (
-        [f"delta_temp_c{i}" for i in range(NUM_CORES)]
-        + [f"log_end_ips_c{i}" for i in range(NUM_CORES)]
-    )
+    target_names = [f"delta_temp_c{i}" for i in range(NUM_CORES)]
 
     return DatasetBundle(
         X=np.stack(X_rows),
@@ -307,24 +299,16 @@ def compute_metrics(Y_true, Y_pred, start_temps):
     """
     Y format:
         [:, 0:4] = delta temp
-        [:, 4:8] = log10(end IPS + 1)
     """
-    true_delta_temp = Y_true[:, :4]
-    pred_delta_temp = Y_pred[:, :4]
+    true_delta_temp = Y_true
+    pred_delta_temp = Y_pred
 
     true_end_temp = start_temps + true_delta_temp
     pred_end_temp = start_temps + pred_delta_temp
 
-    true_log_ips = Y_true[:, 4:]
-    pred_log_ips = Y_pred[:, 4:]
-
-    true_ips = np.power(10.0, true_log_ips) - 1.0
-    pred_ips = np.power(10.0, pred_log_ips) - 1.0
-
     temp_errors = pred_end_temp.reshape(-1) - true_end_temp.reshape(-1)
     abs_temp_errors = np.abs(temp_errors)
 
-    # Temperature metrics
     temp_rmse = rmse(true_end_temp.reshape(-1), pred_end_temp.reshape(-1))
     temp_mae = mean_absolute_error(true_end_temp.reshape(-1), pred_end_temp.reshape(-1))
     temp_r2 = r2_score(true_end_temp.reshape(-1), pred_end_temp.reshape(-1))
@@ -341,39 +325,6 @@ def compute_metrics(Y_true, Y_pred, start_temps):
     peak_mae = mean_absolute_error(true_peak, pred_peak)
     peak_r2 = r2_score(true_peak, pred_peak)
 
-    # IPS metrics in log space
-    log_ips_rmse = rmse(true_log_ips.reshape(-1), pred_log_ips.reshape(-1))
-    log_ips_mae = mean_absolute_error(true_log_ips.reshape(-1), pred_log_ips.reshape(-1))
-    log_ips_r2 = r2_score(true_log_ips.reshape(-1), pred_log_ips.reshape(-1))
-
-    # Active-only IPS metrics.
-    # In your data, inactive cores are usually around 1000 IPS,
-    # while active cores are around 1e9 to 5e9.
-    active_mask = true_ips.reshape(-1) > 1e6
-
-    if np.any(active_mask):
-        active_true_log = true_log_ips.reshape(-1)[active_mask]
-        active_pred_log = pred_log_ips.reshape(-1)[active_mask]
-
-        active_log_ips_rmse = rmse(active_true_log, active_pred_log)
-        active_log_ips_mae = mean_absolute_error(active_true_log, active_pred_log)
-
-        # R2 can be negative if active-only true values have small variance.
-        # This is not a bug; it means predicting the active subset exactly is hard.
-        active_log_ips_r2 = r2_score(active_true_log, active_pred_log)
-
-        active_true_ips = true_ips.reshape(-1)[active_mask]
-        active_pred_ips = pred_ips.reshape(-1)[active_mask]
-
-        active_ips_relative_mae = np.mean(
-            np.abs(active_pred_ips - active_true_ips) / np.maximum(active_true_ips, 1.0)
-        )
-    else:
-        active_log_ips_rmse = np.nan
-        active_log_ips_mae = np.nan
-        active_log_ips_r2 = np.nan
-        active_ips_relative_mae = np.nan
-
     return {
         "temp_rmse_c": temp_rmse,
         "temp_mae_c": temp_mae,
@@ -385,15 +336,6 @@ def compute_metrics(Y_true, Y_pred, start_temps):
         "peak_rmse_c": peak_rmse,
         "peak_mae_c": peak_mae,
         "peak_r2": peak_r2,
-
-        "log_ips_rmse": log_ips_rmse,
-        "log_ips_mae": log_ips_mae,
-        "log_ips_r2": log_ips_r2,
-
-        "active_log_ips_rmse": active_log_ips_rmse,
-        "active_log_ips_mae": active_log_ips_mae,
-        "active_log_ips_r2": active_log_ips_r2,
-        "active_ips_relative_mae": active_ips_relative_mae,
     }
 
 
@@ -414,45 +356,15 @@ def print_metric_table(title, metrics_list):
 
 
 # ------------------------------------------------------------
-# Linear / Ridge model
+# Ridge model
 # ------------------------------------------------------------
 
 def make_model(args):
-    """
-    Three options:
-
-    1. ridge_cv:
-       Ridge regression with automatic alpha selection.
-       Recommended default.
-
-    2. ridge:
-       Ridge regression with manually specified alpha.
-
-    3. linear:
-       Ordinary least squares linear regression.
-       No regularization. Can overfit when features are correlated.
-    """
-    if args.model == "ridge_cv":
-        alphas = np.logspace(args.alpha_min, args.alpha_max, args.alpha_count)
-
-        return RidgeCV(
-            alphas=alphas,
-            fit_intercept=True,
-        )
-
-    if args.model == "ridge":
-        return Ridge(
-            alpha=args.ridge_alpha,
-            fit_intercept=True,
-            random_state=args.seed,
-        )
-
-    if args.model == "linear":
-        return LinearRegression(
-            fit_intercept=True,
-        )
-
-    raise ValueError(f"Unknown model type: {args.model}")
+    return Ridge(
+        alpha=args.ridge_alpha,
+        fit_intercept=True,
+        random_state=args.seed,
+    )
 
 
 def get_model_description(model):
@@ -462,12 +374,6 @@ def get_model_description(model):
     info = {
         "model_class": model.__class__.__name__,
     }
-
-    if hasattr(model, "alpha_"):
-        alpha = model.alpha_
-        if isinstance(alpha, np.ndarray):
-            alpha = alpha.tolist()
-        info["selected_alpha"] = alpha
 
     if hasattr(model, "alpha"):
         info["alpha"] = model.alpha
@@ -489,10 +395,9 @@ def train_and_predict_fold(X, Y, start_temps, train_idx, test_idx, args, fold_id
     start_train = start_temps[train_idx]
     start_test = start_temps[test_idx]
 
-    # Scale X and Y.
-    #
-    # X scaling is important for Ridge because features have very different scales.
-    # Y scaling is useful because delta temperature and log IPS have different ranges.
+    # Scale X and Y. X scaling is important for Ridge because features have
+    # very different ranges. Y scaling keeps the per-core delta-temperature
+    # targets numerically balanced.
     x_scaler = StandardScaler()
     y_scaler = StandardScaler()
 
@@ -560,7 +465,6 @@ def run_cross_validation(bundle, args):
         print("test temp_mae_c  :", f"{test_metrics['temp_mae_c']:.4f}")
         print("test temp_r2     :", f"{test_metrics['temp_r2']:.4f}")
         print("test peak_rmse_c :", f"{test_metrics['peak_rmse_c']:.4f}")
-        print("test log_ips_rmse:", f"{test_metrics['log_ips_rmse']:.4f}")
 
     print_metric_table("TRAIN metrics across folds", train_metrics_all)
     print_metric_table("TEST / CV metrics across folds", test_metrics_all)
@@ -604,6 +508,12 @@ def train_final_model(bundle, args):
 
     joblib.dump(saved, args.output)
 
+    cpp_output = args.cpp_output
+    if cpp_output is None:
+        output_root, _ = os.path.splitext(args.output)
+        cpp_output = output_root + ".txt"
+    export_cpp_model(saved, cpp_output)
+
     print("\nFINAL model trained on all data")
     print("-------------------------------")
     print("model info:", model_info)
@@ -612,8 +522,73 @@ def train_final_model(bundle, args):
         print(f"{k:28s} {v:10.4f}")
 
     print(f"\nSaved model to: {args.output}")
+    print(f"Saved C++ model to: {cpp_output}")
 
     return saved, train_all_metrics
+
+
+def write_vector(file, values):
+    file.write(" ".join(f"{float(v):.17g}" for v in values))
+    file.write("\n")
+
+
+def export_cpp_model(saved, output_path):
+    """
+    Export the fitted linear/Ridge model in a plain text format that the C++
+    scheduler can load without importing Python or sklearn.
+    """
+    model = saved["model"]
+    x_scaler = saved["x_scaler"]
+    y_scaler = saved["y_scaler"]
+    feature_names = saved["feature_names"]
+    target_names = saved["target_names"]
+
+    if not hasattr(model, "coef_") or not hasattr(model, "intercept_"):
+        raise ValueError("C++ export requires a fitted linear model with coef_ and intercept_")
+
+    coef = np.asarray(model.coef_, dtype=np.float64)
+    intercept = np.asarray(model.intercept_, dtype=np.float64)
+    x_mean = np.asarray(x_scaler.mean_, dtype=np.float64)
+    x_scale = np.asarray(x_scaler.scale_, dtype=np.float64)
+    y_mean = np.asarray(y_scaler.mean_, dtype=np.float64)
+    y_scale = np.asarray(y_scaler.scale_, dtype=np.float64)
+
+    if coef.shape != (len(target_names), len(feature_names)):
+        raise ValueError(
+            f"Unexpected coefficient shape {coef.shape}, expected "
+            f"({len(target_names)}, {len(feature_names)})"
+        )
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("THERMAL_REGRESSION_MODEL_V1\n")
+        f.write("num_cores 4\n")
+        f.write(f"num_features {len(feature_names)}\n")
+        f.write(f"num_targets {len(target_names)}\n")
+
+        f.write("feature_names\n")
+        for name in feature_names:
+            f.write(f"{name}\n")
+
+        f.write("target_names\n")
+        for name in target_names:
+            f.write(f"{name}\n")
+
+        f.write("x_mean\n")
+        write_vector(f, x_mean)
+        f.write("x_scale\n")
+        write_vector(f, x_scale)
+        f.write("y_mean\n")
+        write_vector(f, y_mean)
+        f.write("y_scale\n")
+        write_vector(f, y_scale)
+
+        f.write("coef\n")
+        for row in coef:
+            write_vector(f, row)
+
+        f.write("intercept\n")
+        write_vector(f, intercept)
 
 
 # ------------------------------------------------------------
@@ -644,15 +619,21 @@ def main():
 
     parser.add_argument(
         "--output",
-        default="ridge_thermal_ips_model.joblib",
+        default="ml_models/ridge_thermal_ips_model.joblib",
         help="Where to save the final trained model",
     )
 
     parser.add_argument(
+        "--cpp-output",
+        default=None,
+        help="Where to save the C++-readable text model. Default: output path with .txt suffix",
+    )
+
+    parser.add_argument(
         "--model",
-        choices=["ridge_cv", "ridge", "linear"],
-        default="ridge_cv",
-        help="Model type. Default: ridge_cv",
+        choices=["ridge"],
+        default="ridge",
+        help="Model type. Only ridge is currently supported.",
     )
 
     parser.add_argument(
@@ -660,27 +641,6 @@ def main():
         type=float,
         default=1.0,
         help="Alpha for --model ridge",
-    )
-
-    parser.add_argument(
-        "--alpha-min",
-        type=float,
-        default=-4,
-        help="For RidgeCV: minimum exponent for np.logspace(alpha_min, alpha_max, alpha_count)",
-    )
-
-    parser.add_argument(
-        "--alpha-max",
-        type=float,
-        default=4,
-        help="For RidgeCV: maximum exponent for np.logspace(alpha_min, alpha_max, alpha_count)",
-    )
-
-    parser.add_argument(
-        "--alpha-count",
-        type=int,
-        default=41,
-        help="For RidgeCV: number of candidate alpha values",
     )
 
     parser.add_argument(
@@ -700,14 +660,7 @@ def main():
     print(f"targets       : {bundle.Y.shape[1]}")
     print("target names  :", bundle.target_names)
     print("model         :", args.model)
-
-    if args.model == "ridge_cv":
-        print(
-            "ridge alphas  :",
-            f"np.logspace({args.alpha_min}, {args.alpha_max}, {args.alpha_count})",
-        )
-    elif args.model == "ridge":
-        print("ridge alpha   :", args.ridge_alpha)
+    print("ridge alpha   :", args.ridge_alpha)
 
     if args.print_features:
         print("\nFeature names:")

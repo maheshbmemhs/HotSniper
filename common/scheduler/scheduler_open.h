@@ -14,6 +14,7 @@
 #include "policies/dvfspolicy.h"
 #include "policies/mappingpolicy.h"
 #include "policies/migrationpolicy.h"
+#include "policies/dynThreadMapping.h"
 
 
 class SchedulerOpen : public SchedulerPinnedBase {
@@ -41,6 +42,8 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		int getCoreNb(int y, int x);
 		bool isAssignedToTask(int coreId);
 		bool isAssignedToThread(int coreId);
+
+		DynThreadMapping* dynThdMap;
 
 		DVFSPolicy *dvfsPolicy = NULL;
 		long dvfsEpoch;

@@ -28,10 +28,30 @@ public:
     void setDebug(bool debugEnabled) { debug = debugEnabled; }
 
 private:
+    enum ModelType {
+        MODEL_NONE,
+        MODEL_LINEAR,
+        MODEL_LGBM
+    };
+
+    struct LgbmNode {
+        bool isLeaf{false};
+        bool isCategorical{false};
+        unsigned int splitFeature{0};
+        double threshold{0.0};
+        int left{-1};
+        int right{-1};
+        double leafValue{0.0};
+        std::vector<int> catValues;
+    };
+
+    typedef std::vector<LgbmNode> LgbmTree;
+
     bool enabled{false};
     bool phaseAware{false};
     bool usesPhaseInteractions{false};
     bool debug{false};
+    ModelType modelType{MODEL_NONE};
     unsigned int numCores{0};
     unsigned int numFeatures{0};
     unsigned int numTargets{0};
@@ -45,13 +65,18 @@ private:
     std::vector<double> yScale;
     std::vector<std::vector<double> > coefficients;
     std::vector<double> intercept;
+    std::vector<unsigned int> categoricalFeatureIndices;
+    std::vector<std::vector<LgbmTree> > lgbmTrees;
 
     void loadV1(std::ifstream& file);
     void loadV2PhaseAware(std::ifstream& file);
+    void loadLgbmV1(std::ifstream& file);
     void validateModel() const;
     void disable(const std::string& reason);
 
     std::vector<double> buildFeatures(const Inputs& inputs, std::string* classifiedPhase = nullptr) const;
+    std::vector<double> buildLgbmFeatures(const Inputs& inputs, std::string* classifiedPhase = nullptr) const;
+    double predictLgbmDelta(unsigned int target, const std::vector<double>& features) const;
     void validateInputs(const Inputs& inputs) const;
 };
 

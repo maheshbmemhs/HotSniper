@@ -96,6 +96,56 @@ std::vector<double> readVector(std::ifstream& file, const std::string& label, un
     return values;
 }
 
+bool hasNonWhitespace(const std::string& line)
+{
+    return line.find_first_not_of(" \t\r\n") != std::string::npos;
+}
+
+std::vector<unsigned int> readUIntLine(std::ifstream& file, const std::string& label)
+{
+    readToken(file, label);
+
+    std::string line;
+    std::getline(file, line);
+    while (!hasNonWhitespace(line)) {
+        if (!std::getline(file, line)) {
+            throw std::runtime_error("Thermal regression model parse error while reading " + label);
+        }
+    }
+
+    std::vector<unsigned int> values;
+    std::istringstream in(line);
+    unsigned int value = 0;
+    while (in >> value) {
+        values.push_back(value);
+    }
+    return values;
+}
+
+std::vector<int> parseCategoricalValues(const std::string& rawValues)
+{
+    std::vector<int> values;
+    std::istringstream in(rawValues);
+    std::string token;
+    while (std::getline(in, token, ',')) {
+        if (hasNonWhitespace(token)) {
+            std::istringstream valueStream(token);
+            int value = 0;
+            valueStream >> value;
+            if (!valueStream) {
+                throw std::runtime_error("Thermal LGBM model parse error while reading categorical split");
+            }
+            values.push_back(value);
+        }
+    }
+    return values;
+}
+
+bool containsInt(const std::vector<int>& values, int needle)
+{
+    return std::find(values.begin(), values.end(), needle) != values.end();
+}
+
 double mean(const std::vector<double>& values)
 {
     if (values.empty()) {
@@ -215,6 +265,16 @@ bool hasPhase(const std::vector<std::string>& phaseNames, const std::string& pha
     return std::find(phaseNames.begin(), phaseNames.end(), phase) != phaseNames.end();
 }
 
+unsigned int phaseIdForName(const std::vector<std::string>& phaseNames, const std::string& phase)
+{
+    for (unsigned int i = 0; i < phaseNames.size(); i++) {
+        if (phaseNames[i] == phase) {
+            return i;
+        }
+    }
+    return 0;
+}
+
 std::string classifyPhaseForModel(
     const std::vector<double>& startUtil,
     const std::vector<std::string>& phaseNames)
@@ -283,6 +343,8 @@ ThermalRegressionModel::ThermalRegressionModel(const std::string& modelPath)
             loadV1(file);
         } else if (header == "THERMAL_REGRESSION_MODEL_V2_PHASE_AWARE") {
             loadV2PhaseAware(file);
+        } else if (header == "THERMAL_LGBM_MODEL_V1") {
+            loadLgbmV1(file);
         } else {
             throw std::runtime_error("Unsupported thermal regression model header: " + header);
         }
@@ -296,6 +358,7 @@ ThermalRegressionModel::ThermalRegressionModel(const std::string& modelPath)
 
 void ThermalRegressionModel::loadV1(std::ifstream& file)
 {
+    modelType = MODEL_LINEAR;
     phaseAware = false;
     usesPhaseInteractions = false;
     phaseNames.clear();
@@ -331,6 +394,7 @@ void ThermalRegressionModel::loadV1(std::ifstream& file)
 
 void ThermalRegressionModel::loadV2PhaseAware(std::ifstream& file)
 {
+    modelType = MODEL_LINEAR;
     phaseAware = true;
     numCores = readLabeledUInt(file, "num_cores");
     numFeatures = readLabeledUInt(file, "num_features");
@@ -363,8 +427,112 @@ void ThermalRegressionModel::loadV2PhaseAware(std::ifstream& file)
     }
 }
 
+void ThermalRegressionModel::loadLgbmV1(std::ifstream& file)
+{
+    modelType = MODEL_LGBM;
+    phaseAware = true;
+    usesPhaseInteractions = false;
+
+    numCores = readLabeledUInt(file, "num_cores");
+    numFeatures = readLabeledUInt(file, "num_features");
+    numTargets = readLabeledUInt(file, "num_targets");
+
+    phaseNames = readNamesUntilLabel(file, "phase_names", "feature_names");
+    featureNames = readNamesAfterLabel(file, "feature_names", numFeatures);
+    targetNames = readNames(file, "target_names", numTargets);
+    categoricalFeatureIndices = readUIntLine(file, "categorical_feature_indices");
+
+    xMean.clear();
+    xScale.clear();
+    yMean.clear();
+    yScale.clear();
+    coefficients.clear();
+    intercept.clear();
+
+    lgbmTrees.assign(numTargets, std::vector<LgbmTree>());
+    for (unsigned int expectedCore = 0; expectedCore < numTargets; expectedCore++) {
+        readToken(file, "core");
+        unsigned int coreIndex = 0;
+        file >> coreIndex;
+        if (!file) {
+            throw std::runtime_error("Thermal LGBM model parse error while reading core index");
+        }
+        readToken(file, "num_trees");
+        unsigned int numTrees = 0;
+        file >> numTrees;
+        if (!file) {
+            throw std::runtime_error("Thermal LGBM model parse error while reading num_trees");
+        }
+        if (coreIndex >= numTargets) {
+            throw std::runtime_error("Thermal LGBM model core index exceeds num_targets");
+        }
+        if (coreIndex != expectedCore) {
+            throw std::runtime_error("Thermal LGBM model core sections must be in target order");
+        }
+
+        lgbmTrees[coreIndex].reserve(numTrees);
+        for (unsigned int expectedTree = 0; expectedTree < numTrees; expectedTree++) {
+            readToken(file, "tree");
+            unsigned int treeIndex = 0;
+            file >> treeIndex;
+            if (!file) {
+                throw std::runtime_error("Thermal LGBM model parse error while reading tree index");
+            }
+            readToken(file, "num_nodes");
+            unsigned int numNodes = 0;
+            file >> numNodes;
+            if (!file) {
+                throw std::runtime_error("Thermal LGBM model parse error while reading num_nodes");
+            }
+            if (treeIndex != expectedTree) {
+                throw std::runtime_error("Thermal LGBM model trees must be in order");
+            }
+
+            LgbmTree tree(numNodes);
+            for (unsigned int nodeIndex = 0; nodeIndex < numNodes; nodeIndex++) {
+                std::string kind;
+                file >> kind;
+                if (!file) {
+                    throw std::runtime_error("Thermal LGBM model parse error while reading node kind");
+                }
+
+                LgbmNode node;
+                if (kind == "L") {
+                    node.isLeaf = true;
+                    file >> node.leafValue;
+                } else if (kind == "N") {
+                    node.isLeaf = false;
+                    node.isCategorical = false;
+                    file >> node.splitFeature >> node.threshold >> node.left >> node.right;
+                } else if (kind == "C") {
+                    node.isLeaf = false;
+                    node.isCategorical = true;
+                    std::string rawCategories;
+                    file >> node.splitFeature >> rawCategories >> node.left >> node.right;
+                    node.catValues = parseCategoricalValues(rawCategories);
+                } else {
+                    throw std::runtime_error("Thermal LGBM model parse error: unknown node kind " + kind);
+                }
+
+                if (!file) {
+                    throw std::runtime_error("Thermal LGBM model parse error while reading node");
+                }
+                tree[nodeIndex] = node;
+            }
+            lgbmTrees[coreIndex].push_back(tree);
+        }
+    }
+
+    if (phaseNames.empty()) {
+        throw std::runtime_error("Thermal LGBM model must contain at least one phase name");
+    }
+}
+
 void ThermalRegressionModel::validateModel() const
 {
+    if (modelType == MODEL_NONE) {
+        throw std::runtime_error("Thermal regression model type was not initialized");
+    }
     if (numCores != 4) {
         throw std::runtime_error("Thermal regression model num_cores must be 4");
     }
@@ -377,6 +545,45 @@ void ThermalRegressionModel::validateModel() const
     if (targetNames.size() != numTargets) {
         throw std::runtime_error("Thermal regression model target_names length does not match num_targets");
     }
+
+    if (modelType == MODEL_LGBM) {
+        if (phaseNames.empty()) {
+            throw std::runtime_error("Thermal LGBM model has no phase_names");
+        }
+        for (unsigned int index : categoricalFeatureIndices) {
+            if (index >= numFeatures) {
+                throw std::runtime_error("Thermal LGBM model categorical feature index exceeds num_features");
+            }
+        }
+        if (lgbmTrees.size() != numTargets) {
+            throw std::runtime_error("Thermal LGBM model tree target count does not match num_targets");
+        }
+        for (unsigned int target = 0; target < lgbmTrees.size(); target++) {
+            if (lgbmTrees[target].empty()) {
+                throw std::runtime_error("Thermal LGBM model target has no trees");
+            }
+            for (const LgbmTree& tree : lgbmTrees[target]) {
+                if (tree.empty()) {
+                    throw std::runtime_error("Thermal LGBM model contains an empty tree");
+                }
+                for (unsigned int nodeIndex = 0; nodeIndex < tree.size(); nodeIndex++) {
+                    const LgbmNode& node = tree[nodeIndex];
+                    if (!node.isLeaf) {
+                        if (node.splitFeature >= numFeatures) {
+                            throw std::runtime_error("Thermal LGBM model split feature exceeds num_features");
+                        }
+                        if (node.left < 0 || node.right < 0
+                            || static_cast<unsigned int>(node.left) >= tree.size()
+                            || static_cast<unsigned int>(node.right) >= tree.size()) {
+                            throw std::runtime_error("Thermal LGBM model child index is out of range");
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     if (xMean.size() != numFeatures) {
         throw std::runtime_error("Thermal regression model x_mean length does not match num_features");
     }
@@ -410,6 +617,7 @@ void ThermalRegressionModel::disable(const std::string& reason)
     enabled = false;
     phaseAware = false;
     usesPhaseInteractions = false;
+    modelType = MODEL_NONE;
     numCores = 0;
     numFeatures = 0;
     numTargets = 0;
@@ -422,6 +630,8 @@ void ThermalRegressionModel::disable(const std::string& reason)
     yScale.clear();
     coefficients.clear();
     intercept.clear();
+    categoricalFeatureIndices.clear();
+    lgbmTrees.clear();
 
     std::cerr << "[ThermalRegressionModel]: warning: disabling ML thermal predictor: "
               << reason << std::endl;
@@ -437,7 +647,9 @@ std::vector<double> ThermalRegressionModel::predictEndTemperatures(const Inputs&
     std::vector<double> features;
     try {
         validateInputs(inputs);
-        features = buildFeatures(inputs, &classifiedPhase);
+        features = (modelType == MODEL_LGBM)
+            ? buildLgbmFeatures(inputs, &classifiedPhase)
+            : buildFeatures(inputs, &classifiedPhase);
         if (features.size() != numFeatures) {
             std::ostringstream out;
             out << "Thermal regression feature count mismatch: constructed "
@@ -449,19 +661,30 @@ std::vector<double> ThermalRegressionModel::predictEndTemperatures(const Inputs&
         return inputs.startTempsC;
     }
 
-    std::vector<double> scaledFeatures(numFeatures, 0.0);
-    for (unsigned int i = 0; i < numFeatures; i++) {
-        const double scale = (xScale[i] == 0.0) ? 1.0 : xScale[i];
-        scaledFeatures[i] = (features[i] - xMean[i]) / scale;
-    }
-
     std::vector<double> outputs(numTargets, 0.0);
-    for (unsigned int target = 0; target < numTargets; target++) {
-        double scaledOutput = intercept[target];
-        for (unsigned int feature = 0; feature < numFeatures; feature++) {
-            scaledOutput += coefficients[target][feature] * scaledFeatures[feature];
+    if (modelType == MODEL_LGBM) {
+        try {
+            for (unsigned int target = 0; target < numTargets; target++) {
+                outputs[target] = predictLgbmDelta(target, features);
+            }
+        } catch (const std::exception& e) {
+            disable(e.what());
+            return inputs.startTempsC;
         }
-        outputs[target] = scaledOutput * yScale[target] + yMean[target];
+    } else {
+        std::vector<double> scaledFeatures(numFeatures, 0.0);
+        for (unsigned int i = 0; i < numFeatures; i++) {
+            const double scale = (xScale[i] == 0.0) ? 1.0 : xScale[i];
+            scaledFeatures[i] = (features[i] - xMean[i]) / scale;
+        }
+
+        for (unsigned int target = 0; target < numTargets; target++) {
+            double scaledOutput = intercept[target];
+            for (unsigned int feature = 0; feature < numFeatures; feature++) {
+                scaledOutput += coefficients[target][feature] * scaledFeatures[feature];
+            }
+            outputs[target] = scaledOutput * yScale[target] + yMean[target];
+        }
     }
 
     std::vector<double> endTemperatures(numCores, 0.0);
@@ -645,4 +868,115 @@ std::vector<double> ThermalRegressionModel::buildFeatures(const Inputs& inputs, 
     }
 
     return features;
+}
+
+std::vector<double> ThermalRegressionModel::buildLgbmFeatures(const Inputs& inputs, std::string* classifiedPhase) const
+{
+    const unsigned int n = numCores;
+
+    std::vector<double> oldF(n);
+    std::vector<double> newF(n);
+    std::vector<double> deltaF(n);
+    for (unsigned int i = 0; i < n; i++) {
+        oldF[i] = inputs.oldFrequenciesMhz[i] / 1000.0;
+        newF[i] = inputs.newFrequenciesMhz[i] / 1000.0;
+        deltaF[i] = newF[i] - oldF[i];
+    }
+
+    const std::vector<double>& active = inputs.activeCores;
+    const std::vector<double>& startTemp = inputs.startTempsC;
+    const std::vector<double>& startPower = inputs.startPowersW;
+    const std::vector<double>& startUtil = inputs.startUtilizations;
+
+    const std::vector<double> startIpc = cpiToIpc(inputs.startCpis);
+    const std::vector<double> logStartIps = safeLogIps(inputs.startIps);
+    const std::vector<double> tempNeighbor = neighborMean(startTemp);
+    const std::vector<double> powerNeighbor = neighborMean(startPower);
+
+    std::vector<double> workloadIndex(n);
+    for (unsigned int i = 0; i < n; i++) {
+        workloadIndex[i] = active[i] * startUtil[i] * newF[i] * newF[i] * newF[i] * startIpc[i];
+    }
+
+    const double startPeak = (inputs.startPeakTempC >= 0.0)
+        ? inputs.startPeakTempC
+        : *std::max_element(startTemp.begin(), startTemp.end());
+
+    std::vector<double> features;
+    features.reserve(numFeatures);
+
+    features.push_back(startPeak);
+    features.push_back(*std::max_element(startTemp.begin(), startTemp.end()));
+    features.push_back(mean(startTemp));
+    features.push_back(std::accumulate(startPower.begin(), startPower.end(), 0.0));
+    features.push_back(*std::max_element(startPower.begin(), startPower.end()));
+    features.push_back(std::accumulate(active.begin(), active.end(), 0.0));
+    features.push_back(*std::max_element(newF.begin(), newF.end()));
+    features.push_back(std::accumulate(newF.begin(), newF.end(), 0.0));
+    features.push_back(*std::max_element(deltaF.begin(), deltaF.end()));
+    features.push_back(std::accumulate(deltaF.begin(), deltaF.end(), 0.0));
+
+    addVectorFeatures(features, oldF);
+    addVectorFeatures(features, newF);
+    addVectorFeatures(features, deltaF);
+    addVectorFeatures(features, active);
+    addVectorFeatures(features, startTemp);
+    addVectorFeatures(features, tempNeighbor);
+    addVectorFeatures(features, startPower);
+    addVectorFeatures(features, powerNeighbor);
+    addVectorFeatures(features, startUtil);
+    addVectorFeatures(features, startIpc);
+    addVectorFeatures(features, inputs.startRelNucaCpis);
+    addVectorFeatures(features, logStartIps);
+    addVectorFeatures(features, workloadIndex);
+
+    const std::string phase = classifyPhaseForModel(startUtil, phaseNames);
+    if (classifiedPhase != nullptr) {
+        *classifiedPhase = phase;
+    }
+    features.push_back(static_cast<double>(phaseIdForName(phaseNames, phase)));
+
+    return features;
+}
+
+double ThermalRegressionModel::predictLgbmDelta(unsigned int target, const std::vector<double>& features) const
+{
+    if (target >= lgbmTrees.size()) {
+        throw std::runtime_error("Thermal LGBM prediction target is out of range");
+    }
+
+    double sum = 0.0;
+    for (const LgbmTree& tree : lgbmTrees[target]) {
+        int nodeIndex = 0;
+        for (unsigned int step = 0; step <= tree.size(); step++) {
+            if (nodeIndex < 0 || static_cast<unsigned int>(nodeIndex) >= tree.size()) {
+                throw std::runtime_error("Thermal LGBM prediction reached an invalid node index");
+            }
+
+            const LgbmNode& node = tree[static_cast<unsigned int>(nodeIndex)];
+            if (node.isLeaf) {
+                sum += node.leafValue;
+                break;
+            }
+
+            if (node.splitFeature >= features.size()) {
+                throw std::runtime_error("Thermal LGBM prediction split feature is out of range");
+            }
+
+            bool goLeft = false;
+            const double featureValue = features[node.splitFeature];
+            if (node.isCategorical) {
+                goLeft = containsInt(node.catValues, static_cast<int>(std::round(featureValue)));
+            } else {
+                goLeft = featureValue <= node.threshold;
+            }
+            nodeIndex = goLeft ? node.left : node.right;
+
+            if (step == tree.size()) {
+                throw std::runtime_error("Thermal LGBM prediction did not reach a leaf");
+            }
+        }
+    }
+
+    return sum;
 }

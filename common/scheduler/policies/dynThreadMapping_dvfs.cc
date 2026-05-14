@@ -1,25 +1,80 @@
 #include "dynThreadMapping.h"
+#include <cmath>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <queue>
 #include <algorithm>
+
+namespace {
+
+double readCounterValue(const std::function<double()> &reader, double fallback)
+{
+    try {
+        double value = reader();
+        if (std::isfinite(value) && value >= 0.0) {
+            return value;
+        }
+    } catch (...) {
+    }
+    return fallback;
+}
+
+double scaledForCandidateFrequency(double value, double source_freq_ghz, double target_freq_ghz)
+{
+    if (!std::isfinite(value) || value < 0.0) {
+        value = 0.0;
+    }
+    if (!std::isfinite(source_freq_ghz) || source_freq_ghz <= 0.0 ||
+        !std::isfinite(target_freq_ghz) || target_freq_ghz < 0.0) {
+        return value;
+    }
+    const double ratio = std::min(4.0, std::max(0.0, target_freq_ghz / source_freq_ghz));
+    return value * ratio;
+}
+
+}
 
 DynThreadMapping::DynThreadMapping(const PerformanceCounters *performanceCounters, 
                                    int coreRows, 
                                    int coreColumns, 
                                    std::string profile_path,
+                                   std::string thermal_model_path,
+                                   bool thermal_model_debug,
+                                   float predictionTemperatureBar_,
+                                   float predictionSafetyMargin_,
+                                   float migrationUtilizationDeltaThreshold_,
+                                   float masterMigrationTemperatureDeltaThreshold_,
+                                   unsigned long long masterMigrationCooldownNs_,
                                    float tolerance_,
                                    float dvfs_interval,
                                    std::vector<float> core_states_,
                                    float dtmCriticalTemperature, 
-                                   float dtmRecoveredTemperature): 
+                                   float dtmRecoveredTemperature,
+                                   bool sampleExplorationEnabled_,
+                                   float sampleTargetMinTemperature_,
+                                   float sampleTargetMaxTemperature_,
+                                   float sampleMigrationProbability_,
+                                   unsigned int sampleRandomSeed_): 
 performanceCounters(performanceCounters),
 coreRows(coreRows),
 coreColumns(coreColumns),
 core_states(core_states_),
 pred(profile_path),
+thermal_model(thermal_model_path, thermal_model_debug),
 dtmCriticalTemperature(dtmCriticalTemperature),
 dtmRecoveredTemperature(dtmRecoveredTemperature),
+predictionTemperatureBar(predictionTemperatureBar_),
+predictionSafetyMargin(std::max(0.0f, predictionSafetyMargin_)),
+migrationUtilizationDeltaThreshold(std::max(0.0f, migrationUtilizationDeltaThreshold_)),
+masterMigrationTemperatureDeltaThreshold(std::max(0.0f, masterMigrationTemperatureDeltaThreshold_)),
+masterMigrationCooldownNs(masterMigrationCooldownNs_),
+sampleExplorationEnabled(sampleExplorationEnabled_),
+sampleTargetMinTemperature(std::min(sampleTargetMinTemperature_, sampleTargetMaxTemperature_)),
+sampleTargetMaxTemperature(std::max(sampleTargetMinTemperature_, sampleTargetMaxTemperature_)),
+sampleMigrationProbability(std::min(1.0f, std::max(0.0f, sampleMigrationProbability_))),
+sampleRandomGenerator(sampleRandomSeed_),
 tolerance(tolerance_),
 dvfsInterval(dvfs_interval) {
     std::string s_core_states = "[";
@@ -28,19 +83,56 @@ dvfsInterval(dvfs_interval) {
     }
     std::cout << "[Scheduler][DynThreadMapping]: Initializing with: "
     << "\n profile path: " << profile_path
+    << "\n thermal model path: " << thermal_model_path
     << "\n critical temp: " << dtmCriticalTemperature
     << "\n recovery temp: " << dtmRecoveredTemperature
+    << "\n prediction temp bar: " << predictionTemperatureBar
+    << "\n prediction safety margin: " << predictionSafetyMargin
+    << "\n effective prediction temp bar: " << effectivePredictionTemperatureBar()
+    << "\n migration util delta threshold: " << migrationUtilizationDeltaThreshold
+    << "\n master migration temp delta threshold: " << masterMigrationTemperatureDeltaThreshold
+    << "\n master migration cooldown ns: " << masterMigrationCooldownNs
+    << "\n sample exploration: " << (sampleExplorationEnabled ? "on" : "off")
+    << "\n sample target temp range: [" << sampleTargetMinTemperature << ", " << sampleTargetMaxTemperature << "]"
     << "\n tolerance: " << tolerance
     << "\n dvfs interval: " << dvfsInterval
     << "\n states: " << s_core_states << "]"
-    << std::endl;
+	    << std::endl;
+	}
+
+void DynThreadMapping::clearLastTemperaturePrediction()
+{
+    hasLastPredictedTemperatures = false;
+    lastPredictedTemperatures.clear();
+    lastPredictedFrequenciesMhz.clear();
 }
 
-std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFrequencies, const std::vector<bool> &activeCores) {
-    if (throttle()) {
+void DynThreadMapping::setLastTemperaturePrediction(const std::vector<double> &predictedTemps,
+                                                    const std::vector<int> &frequenciesMhz)
+{
+    hasLastPredictedTemperatures = !predictedTemps.empty();
+    lastPredictedTemperatures = predictedTemps;
+    lastPredictedFrequenciesMhz = frequenciesMhz;
+}
+
+float DynThreadMapping::effectivePredictionTemperatureBar() const
+{
+    return std::max(0.0f, predictionTemperatureBar - predictionSafetyMargin);
+}
+	
+	std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFrequencies, const std::vector<bool> &activeCores) {
+	    if (throttle()) {
+	        clearLastTemperaturePrediction();
+	        hasPendingCombinedFrequencies = false;
+	        pendingCombinedFrequencies.clear();
         std::vector<int> minFrequencies(coreRows * coreColumns, core_states[0]*1000);
         std::cout << "[Scheduler][DynThreadMapping]: in throttle mode -> return min. frequencies" << std::endl;
         return minFrequencies;
+    } else if(hasPendingCombinedFrequencies){
+        hasPendingCombinedFrequencies = false;
+        migrationOccured = false;
+        std::cout << "[Scheduler][DynThreadMapping][Combined]: applying combined migration+DVFS frequencies" << std::endl;
+        return pendingCombinedFrequencies;
     } else if(!migrationOccured){
         std::cout << "[Scheduler][DynThreadMapping]: Starting DVFS"<< std::endl;
         std::cout << "[Scheduler][DynThreadMapping]: Active Cores: ";
@@ -50,12 +142,13 @@ std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFre
         std::cout<<std::endl;
 
         // Non-Parallel Region
-        if(std::count(activeCores.begin(), activeCores.end(), true)==1){
-            std::cout << "[Scheduler][DynThreadMapping]: Non-Parallel region, setting inactive cores to lowest frequency and active core to 2.0 Ghz" << std::endl;
-            std::vector<int> newFrequencies(coreRows * coreColumns,core_states[0]);
-            newFrequencies[std::distance(std::begin(activeCores), std::find(activeCores.begin(), activeCores.end(),true))]=2000; // Set only active core to 2 GHz
-            return newFrequencies;
-        }
+	        if(std::count(activeCores.begin(), activeCores.end(), true)==1){
+	            std::cout << "[Scheduler][DynThreadMapping]: Non-Parallel region, setting inactive cores to lowest frequency and active core to 2.0 Ghz" << std::endl;
+	            std::vector<int> newFrequencies(coreRows * coreColumns,core_states[0]);
+	            newFrequencies[std::distance(std::begin(activeCores), std::find(activeCores.begin(), activeCores.end(),true))]=2000; // Set only active core to 2 GHz
+	            clearLastTemperaturePrediction();
+	            return newFrequencies;
+	        }
 
         // Start all frequencies at the highest (max IPS)
         std::vector<int> newFrequencies(coreRows * coreColumns,core_states.back()*1000);
@@ -66,22 +159,99 @@ std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFre
         // Get Predictions for each of the active cores
         std::vector<NeighborPrediction::PredictionMap> predictions;
 
+        const size_t numCores = coreRows * coreColumns;
+        std::vector<double> currentTemps(numCores, 0.0);
+        std::vector<double> currentFreqs(numCores, 0.0);
+        std::vector<double> ips(numCores, 0.0);
+        std::vector<double> utilizations(numCores, 0.0);
+        std::vector<double> cpis(numCores, 0.0);
+        std::vector<double> relNucaCpis(numCores, 0.0);
+        std::vector<double> powers(numCores, 0.0);
+
+        for(size_t core = 0; core < numCores; core++){
+            currentTemps[core] = readCounterValue([&] { return performanceCounters->getTemperatureOfCore(core); }, 0.0);
+            powers[core] = readCounterValue([&] { return performanceCounters->getPowerOfCore(core); }, 0.0);
+            utilizations[core] = readCounterValue([&] { return performanceCounters->getUtilizationOfCore(core); }, 0.0);
+            cpis[core] = readCounterValue([&] { return performanceCounters->getCPIOfCore(core); }, 0.0);
+            relNucaCpis[core] = readCounterValue([&] { return performanceCounters->getRelNUCACPIOfCore(core); }, 0.0);
+            ips[core] = readCounterValue([&] { return performanceCounters->getIPSOfCore(core); }, 0.0);
+
+            double old_freq_mhz = core < oldFrequencies.size() ? oldFrequencies[core] : -1.0;
+            if (!std::isfinite(old_freq_mhz) || old_freq_mhz <= 0.0) {
+                old_freq_mhz = readCounterValue([&] { return performanceCounters->getFreqOfCore(core); }, 0.0);
+            }
+            currentFreqs[core] = old_freq_mhz > 0.0 ? old_freq_mhz / 1000.0 : 0.0;
+        }
+
         for(size_t i =0;i<(coreRows * coreColumns);i++){
             if(activeCores.at(i)){
                 float current_ips = getMeasuredIPSBillions(i);
+                NeighborPrediction::PredictionMap pm;
                 // Thread is doing next to nothing, give it predictions that make it ignored in any moves
                 if(current_ips <= 0.1){
                     std::cout << "[Scheduler][DynThreadMapping]: Warning IPS of core "<<i<<" is near zero, using ignored predictions"<< std::endl;
-                    NeighborPrediction::PredictionMap temp;
                     for(float state: core_states){
-                        temp.emplace(state,NeighborPrediction::core_status{"none",0.0f,0.0f,0.0f,0.0f,0.0f});
+                        pm.emplace(state,NeighborPrediction::core_status{"none",0.0f,0.0f,0.0f,static_cast<float>(currentTemps[i]),0.0f});
                     }
-                    predictions.push_back(temp);
                     currentStatesIdx[i]=0; // If we cant predict states accurately set core to lowest freq to be safe
                 } else{
                     float current_state = float(oldFrequencies[i])/1000.0f; // Mhz to GHz
-                    predictions.push_back(pred.getNearestBenchmark(current_state,current_ips));
+                    pm = pred.getNearestBenchmark(current_state,current_ips);
                 }
+
+                if(thermal_model.isLoaded()){
+                    for(float state: core_states){
+                        auto status = pm.find(state);
+                        if(status == pm.end()){
+                            continue;
+                        }
+
+                        std::vector<double> candidateFreqs = currentFreqs;
+                        if(i < candidateFreqs.size()){
+                            candidateFreqs[i] = state;
+                        }
+	                        std::vector<double> expectedIps = ips;
+	                        std::vector<double> expectedCpis = cpis;
+	                        std::vector<double> expectedPowers = powers;
+	                        std::vector<double> expectedUtilizations = utilizations;
+	                        expectedIps[i] = scaledForCandidateFrequency(ips[i], currentFreqs[i], state);
+	                        expectedCpis[i] = cpis[i];
+	                        expectedPowers[i] = scaledForCandidateFrequency(powers[i], currentFreqs[i], state);
+
+                        const double ml_temp = thermal_model.predictNextTemp(
+                            i,
+                            currentTemps,
+                            currentFreqs,
+                            candidateFreqs,
+                            ips,
+                            utilizations,
+                            cpis,
+                            relNucaCpis,
+                            powers,
+                            activeCores,
+	                            true,
+	                            &expectedIps,
+	                            &expectedCpis,
+	                            &expectedPowers,
+	                            &expectedUtilizations,
+	                            &activeCores);
+
+                        if(std::isfinite(ml_temp)){
+                            status->second.temp = ml_temp;
+                            static bool logged_ml_prediction = false;
+                            if(!logged_ml_prediction){
+                                std::cout << "[MLTemperaturePredictor] first prediction core=" << i
+                                          << " cand_freq=" << state
+                                          << " pred_temp=" << ml_temp << std::endl;
+                                logged_ml_prediction = true;
+                            }
+                        } else {
+                            std::cerr << "[Scheduler][DynThreadMapping]: Warning ML temperature prediction failed for core "
+                                      << i << " state " << state << "GHz; using NeighborPrediction temperature" << std::endl;
+                        }
+                    }
+                }
+                predictions.push_back(pm);
             }else{
                 predictions.push_back({});
                 currentStatesIdx[i]=0; // Inactive, set to lowest freq
@@ -107,19 +277,27 @@ std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFre
         get_lowest_freq(predictions,activeCores,currentStatesIdx);
         std::cout << "[Scheduler][DynThreadMapping]: Final States "<< std::endl;
 
-        // Update core frequency
-        for(size_t i=0;i<(coreRows * coreColumns);i++){
-            newFrequencies[i]=int(1000*core_states[currentStatesIdx[i]]);
-            double cur_temp = performanceCounters->getTemperatureOfCore(i);
-            double nn_pred_temp = predictions[i][core_states[currentStatesIdx[i]]].temp;
-            std::cout << "[Scheduler][DynThreadMapping]: core "<< i << ": freq "<<core_states[currentStatesIdx[i]] 
-                      <<" temp "<<cur_temp<<" -> "<<nn_pred_temp<<" = "<<calc_temperature(cur_temp,nn_pred_temp,dvfsInterval,thermalInertia)<< std::endl;
-
-        }
-        return newFrequencies;
-    } else{
-        migrationOccured = false;
-        return {oldFrequencies};
+	        // Update core frequency
+	        std::vector<double> selectedPredictedTemps(coreRows * coreColumns, std::numeric_limits<double>::quiet_NaN());
+	        for(size_t i=0;i<(coreRows * coreColumns);i++){
+	            newFrequencies[i]=int(1000*core_states[currentStatesIdx[i]]);
+	            double cur_temp = performanceCounters->getTemperatureOfCore(i);
+	            double nn_pred_temp = std::numeric_limits<double>::quiet_NaN();
+	            auto status = predictions[i].find(core_states[currentStatesIdx[i]]);
+	            if(status != predictions[i].end()){
+	                nn_pred_temp = status->second.temp;
+	            }
+	            selectedPredictedTemps[i] = nn_pred_temp;
+	            std::cout << "[Scheduler][DynThreadMapping]: core "<< i << ": freq "<<core_states[currentStatesIdx[i]] 
+	                      <<" temp "<<cur_temp<<" -> "<<nn_pred_temp<< std::endl;
+	
+	        }
+	        setLastTemperaturePrediction(selectedPredictedTemps, newFrequencies);
+	        return newFrequencies;
+	    } else{
+	        clearLastTemperaturePrediction();
+	        migrationOccured = false;
+	        return oldFrequencies;
     }
 }
 
@@ -141,12 +319,12 @@ DynThreadMapping::Move DynThreadMapping::get_best_move(const std::vector<Neighbo
             // Current IPS and Temp values
             float current_state = core_states[currentStatesIdx[i]];
             float ips_before = prediction[current_state].ips;
-            float temp_before = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[current_state].temp,dvfsInterval,thermalInertia);
+            float temp_before = prediction[current_state].temp;
 
             // Potential IPS and Temp values of next state
             float new_state = core_states[currentStatesIdx[i]-1]; // next state is just current for core i minus 1
             float ips_after = prediction[new_state].ips;   
-            float temp_after = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[new_state].temp,dvfsInterval,thermalInertia);
+            float temp_after = prediction[new_state].temp;
             
             double delta_ips = ips_before-ips_after;
             double delta_temp = temp_before-temp_after;
@@ -175,6 +353,7 @@ void DynThreadMapping::get_lowest_freq(const std::vector<NeighborPrediction::Pre
                      const std::vector<bool>& activeCores,
                      std::vector<int>& currentStatesIdx){
 
+    const float effectivePredictionBar = effectivePredictionTemperatureBar();
     for(size_t i = 0;i<currentStatesIdx.size(); i++){
         if(activeCores.at(i)){
             // Cant go any lower than this state
@@ -182,12 +361,20 @@ void DynThreadMapping::get_lowest_freq(const std::vector<NeighborPrediction::Pre
                 continue;
             }
             auto prediction = predictions[i];
-            double pred_temp = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[core_states[currentStatesIdx[i]]].temp,dvfsInterval,thermalInertia);
-            while(pred_temp>=dtmCriticalTemperature+tolerance){
-                std::cerr<<"Lowering core " <<i<<" freq from " <<core_states[currentStatesIdx[i]] << " GHz to " << core_states[currentStatesIdx[i]-1] << " Ghz" << std::endl;
+            double pred_temp = prediction[core_states[currentStatesIdx[i]]].temp;
+            while(currentStatesIdx[i] > 0 && pred_temp>=effectivePredictionBar){
+                std::cerr<<"Lowering core " <<i<<" freq from " <<core_states[currentStatesIdx[i]]
+                         << " GHz to " << core_states[currentStatesIdx[i]-1]
+                         << " GHz because predicted temp " << pred_temp
+                         << "C exceeds effective prediction bar " << effectivePredictionBar << "C" << std::endl;
                 currentStatesIdx[i]-=1;
                 float new_state = core_states[currentStatesIdx[i]];
-                pred_temp = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[new_state].temp,dvfsInterval,thermalInertia);
+                pred_temp = prediction[new_state].temp;
+            }
+            if(pred_temp>=effectivePredictionBar){
+                std::cerr << "[Scheduler][DynThreadMapping]: Warning lowest frequency for core " << i
+                          << " still predicts " << pred_temp
+                          << "C, above effective prediction bar " << effectivePredictionBar << "C" << std::endl;
             }
         }
     }
@@ -213,17 +400,20 @@ double DynThreadMapping::getMeasuredIPSBillions(unsigned int coreId) {
 bool DynThreadMapping::checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, 
                                              const std::vector<int>& currentStateIdx, 
                                              const std::vector<bool>& activeCores){
+    const float effectivePredictionBar = effectivePredictionTemperatureBar();
     for (unsigned int coreCounter = 0; coreCounter < coreRows * coreColumns; coreCounter++) {
         if(activeCores.at(coreCounter)){
             auto prediction = predictions[coreCounter];
             float new_clock_speed = core_states[currentStateIdx[coreCounter]];
             float cur_temp = performanceCounters->getTemperatureOfCore(coreCounter);
             float nn_pred_temp = prediction.at(new_clock_speed).temp;
-            double temp= calc_temperature(cur_temp,nn_pred_temp,dvfsInterval,thermalInertia);
+            double temp= nn_pred_temp;
             std::cout << "[Scheduler][DynThreadMapping]: core "<< coreCounter << ": freq "<<new_clock_speed
-                      <<" temp "<<cur_temp<<" -> "<<nn_pred_temp<<" = "<<temp<< std::endl;
-            if(temp>=dtmCriticalTemperature+tolerance){
-                std::cout << "[Scheduler][DynThreadMapping]: Predicted Temp for core "<<coreCounter<<" ("<<temp<<"C) is greater than target" << std::endl;
+                      <<" temp "<<cur_temp<<" -> "<<temp<< std::endl;
+            if(temp>=effectivePredictionBar){
+                std::cout << "[Scheduler][DynThreadMapping]: Predicted Temp for core "<<coreCounter
+                          <<" ("<<temp<<"C) is greater than effective prediction bar "
+                          << effectivePredictionBar << "C" << std::endl;
                 return false;
             }
         }

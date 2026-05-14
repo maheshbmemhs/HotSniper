@@ -16,6 +16,7 @@
 #include "policies/migrationpolicy.h"
 #include "policies/dynThreadMapping.h"
 
+#include <fstream>
 
 class SchedulerOpen : public SchedulerPinnedBase {
 
@@ -72,6 +73,36 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		void migrateThread(thread_id_t thread_id, core_id_t core_id);
 
 		std::string formatTime(SubsecondTime time);
+
+		struct ThermalSampleSnapshot {
+			UInt64 timeNs;
+			std::vector<int> frequenciesMhz;
+			std::vector<int> activeCores;
+			std::vector<int> threadActive;
+			std::vector<int> taskIds;
+			std::vector<int> threadIds;
+			std::vector<double> tempsC;
+			std::vector<double> powersW;
+			std::vector<double> utilizations;
+			std::vector<double> cpis;
+			std::vector<double> relNucaCpis;
+			std::vector<double> ips;
+		};
+			bool thermalSampleEnabled = false;
+			bool thermalSampleDebug = false;
+			bool hasThermalSampleStart = false;
+		UInt64 thermalSampleCycle = 0;
+		long thermalSampleEpoch = 1000000;
+		std::string thermalSamplePath;
+		std::ofstream thermalSampleFile;
+			ThermalSampleSnapshot thermalSampleStart;
+			std::vector<int> thermalSampleNewFrequenciesMhz;
+			std::vector<double> thermalSamplePredictedTempsC;
+			void initThermalSampler();
+			ThermalSampleSnapshot captureThermalSampleSnapshot(SubsecondTime time);
+			void writeThermalSampleRow(const ThermalSampleSnapshot &start, const ThermalSampleSnapshot &end, const std::vector<int> &newFrequenciesMhz, const std::vector<double> &predictedTempsC);
+		void updateThermalSamplerBeforePolicies(SubsecondTime time);
+		void updateThermalSamplerAfterPolicies();
 
 		core_id_t getNextCore(core_id_t core_first);
 		core_id_t getFreeCore(core_id_t core_first);

@@ -1,3 +1,4 @@
+import argparse
 import datetime
 import math
 import os
@@ -38,6 +39,52 @@ def change_base_configuration(base_configuration):
                     line = '#' + line
             f.write(line)
             f.write('\n')
+
+
+def format_base_cfg_value(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (int, float)):
+        return str(value)
+    return '"{}"'.format(str(value).replace('"', '\\"'))
+
+
+def apply_base_cfg_overrides(base_cfg_overrides):
+    if not base_cfg_overrides:
+        return
+
+    base_cfg = os.path.join(SNIPER_BASE, 'config/base.cfg')
+    with open(base_cfg, 'r') as f:
+        lines = f.read().splitlines()
+
+    current_section = ''
+    updated = set()
+    output = []
+
+    for line in lines:
+        section_match = re.match(r'\s*\[([^\]]+)\]\s*$', line)
+        if section_match:
+            current_section = section_match.group(1)
+            output.append(line)
+            continue
+
+        stripped = line.lstrip()
+        key_match = re.match(r'([A-Za-z_][A-Za-z_0-9]*)\s*=', stripped)
+        if key_match and not stripped.startswith('#') and current_section:
+            full_key = '{}/{}'.format(current_section, key_match.group(1))
+            if full_key in base_cfg_overrides:
+                line = '{} = {}'.format(key_match.group(1), format_base_cfg_value(base_cfg_overrides[full_key]))
+                updated.add(full_key)
+
+        output.append(line)
+
+    missing = sorted(set(base_cfg_overrides) - updated)
+    if missing:
+        raise KeyError('base.cfg override key(s) not found: {}'.format(', '.join(missing)))
+
+    with open(base_cfg, 'w') as f:
+        f.write('\n'.join(output))
+        f.write('\n')
 
 
 def prev_run_cleanup():
@@ -109,10 +156,11 @@ def save_output(base_configuration, benchmark, console_output, cpistack, started
     create_plots(run)
 
 
-def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None):
+def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None, base_cfg_overrides=None):
     print('running {} with configuration {}'.format(benchmark, '+'.join(base_configuration)))
     started = datetime.datetime.now()
     change_base_configuration(base_configuration)
+    apply_base_cfg_overrides(base_cfg_overrides)
 
     prev_run_cleanup()
 
@@ -372,10 +420,131 @@ def test_static_power():
     run(['4.0GHz', 'testStaticPower', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 
+def dyn_thread_mapping_run(args):
+    base_cfg_overrides = {}
+    thermal_sample_requested = bool(
+        args.thermal_sample_file
+        or args.thermal_sample_debug
+        or args.thermal_sample_random
+    )
+    base_cfg_overrides['scheduler/open/thermal_sampler/enabled'] = thermal_sample_requested
+    base_cfg_overrides['scheduler/open/thermal_sampler/debug'] = bool(args.thermal_sample_debug)
+    base_cfg_overrides['scheduler/open/thermal_sampler/exploration_enabled'] = bool(args.thermal_sample_random)
+    base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/thermal_model_debug'] = bool(args.thermal_model_debug)
+    base_cfg_overrides['scheduler/open/dvfs/reserved_cores_are_active'] = bool(args.reserved_cores_active)
+    base_cfg_overrides['scheduler/open/migration/logic'] = 'off' if args.disable_migration else 'DynThreadMapping'
+
+    if args.profile_file:
+        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/profile_path'] = args.profile_file
+    if args.thermal_model_file:
+        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/thermal_model_path'] = args.thermal_model_file
+    if args.prediction_temperature_bar is not None:
+        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/prediction_temperature_bar'] = args.prediction_temperature_bar
+    if args.prediction_safety_margin is not None:
+        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/prediction_safety_margin'] = args.prediction_safety_margin
+    if args.migration_utilization_delta_threshold is not None:
+        base_cfg_overrides['scheduler/open/migration/DynThreadMapping/utilization_delta_threshold'] = args.migration_utilization_delta_threshold
+    if args.master_migration_temp_delta is not None:
+        base_cfg_overrides['scheduler/open/migration/DynThreadMapping/master_temperature_delta_threshold'] = args.master_migration_temp_delta
+    if args.master_migration_cooldown_ns is not None:
+        base_cfg_overrides['scheduler/open/migration/DynThreadMapping/master_cooldown_ns'] = args.master_migration_cooldown_ns
+    if args.thermal_sample_file:
+        base_cfg_overrides['scheduler/open/thermal_sampler/path'] = args.thermal_sample_file
+    if args.thermal_sample_min_temp is not None:
+        base_cfg_overrides['scheduler/open/thermal_sampler/target_min_temperature'] = args.thermal_sample_min_temp
+    if args.thermal_sample_max_temp is not None:
+        base_cfg_overrides['scheduler/open/thermal_sampler/target_max_temperature'] = args.thermal_sample_max_temp
+    if args.thermal_sample_migration_probability is not None:
+        base_cfg_overrides['scheduler/open/thermal_sampler/migration_probability'] = args.thermal_sample_migration_probability
+    if args.thermal_sample_random_seed is not None:
+        base_cfg_overrides['scheduler/open/thermal_sampler/random_seed'] = args.thermal_sample_random_seed
+
+    base_configuration = [
+        '{:.1f}GHz'.format(args.frequency),
+        'DynThreadMapping',
+        args.dvfs_speed,
+    ]
+    benchmark = get_instance(args.benchmark, args.parallelism, input_set=args.input_set)
+    run(
+        base_configuration,
+        benchmark,
+        ignore_error=args.ignore_error,
+        base_cfg_overrides=base_cfg_overrides,
+    )
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--h1', action='store_true',
+                        help='Alias for the default DynThreadMapping experiment.')
+    parser.add_argument('--dyn-thread-mapping', action='store_true',
+                        help='Run the default DynThreadMapping experiment.')
+    parser.add_argument('--thermal-model-file', default=None,
+                        help='C++ text model path for scheduler/open/dvfs/DynThreadMapping/thermal_model_path.')
+    parser.add_argument('--prediction-temperature-bar', type=float, default=None,
+                        help='Upper bound for predicted candidate temperature before DynThreadMapping will lower frequency.')
+    parser.add_argument('--prediction-safety-margin', type=float, default=None,
+                        help='Conservative margin subtracted from prediction-temperature-bar when testing candidate safety.')
+    parser.add_argument('--migration-utilization-delta-threshold', type=float, default=None,
+                        help='Minimum high-vs-low core utilization delta required before DynThreadMapping migration moves threads.')
+    parser.add_argument('--master-migration-temp-delta', type=float, default=None,
+                        help='Minimum current-vs-target core temperature delta required for master-only migration.')
+    parser.add_argument('--master-migration-cooldown-ns', type=int, default=None,
+                        help='Cooldown in ns between master-only migrations.')
+    parser.add_argument('--thermal-sample-file', default=None,
+                        help='Enable scheduler thermal sampling and write interval CSV rows to this path.')
+    parser.add_argument('--thermal-sample-debug', action='store_true',
+                        help='Print predicted-vs-actual temperature and old/new frequency for each thermal sample interval.')
+    parser.add_argument('--thermal-sample-random', action='store_true',
+                        help='Randomize migration and frequencies while thermal sampling.')
+    parser.add_argument('--thermal-sample-min-temp', type=float, default=None,
+                        help='Lower target temperature for random thermal sampling.')
+    parser.add_argument('--thermal-sample-max-temp', type=float, default=None,
+                        help='Upper target temperature for random thermal sampling.')
+    parser.add_argument('--thermal-sample-migration-probability', type=float, default=None,
+                        help='Probability of applying a random migration permutation in thermal sample random mode.')
+    parser.add_argument('--thermal-sample-random-seed', type=int, default=None,
+                        help='Random seed for thermal sample random mode.')
+    parser.add_argument('--profile-file', default=None,
+                        help='Profile file path for NeighborPrediction.')
+    parser.add_argument('--thermal-model-debug', action='store_true',
+                        help='Print every ML temperature prediction.')
+    parser.add_argument('--reserved-cores-active', action='store_true',
+                        help='Treat task-reserved cores as active for DynThreadMapping DVFS.')
+    parser.add_argument('--disable-migration', action='store_true',
+                        help='Disable DynThreadMapping migration so DVFS prediction runs every epoch.')
+    parser.add_argument('--benchmark', default='parsec-blackscholes')
+    parser.add_argument('--parallelism', type=int, default=3)
+    parser.add_argument('--input-set', default='simsmall')
+    parser.add_argument('--frequency', type=float, default=3.0)
+    parser.add_argument('--dvfs-speed', default='slowDVFS')
+    parser.add_argument('--ignore-error', action='store_true')
+
+    args = parser.parse_args()
+
+    if len(sys.argv) == 1:
+        example()
+        # test_static_power()
+        # multi_program()
+        return
+
+    if (args.h1 or args.dyn_thread_mapping or args.thermal_model_file or args.profile_file
+            or args.prediction_temperature_bar is not None
+            or args.prediction_safety_margin is not None
+            or args.migration_utilization_delta_threshold is not None
+            or args.master_migration_temp_delta is not None
+            or args.master_migration_cooldown_ns is not None
+            or args.thermal_sample_file
+            or args.thermal_sample_debug
+            or args.thermal_sample_random
+            or args.thermal_sample_min_temp is not None
+            or args.thermal_sample_max_temp is not None
+            or args.thermal_sample_migration_probability is not None
+            or args.thermal_sample_random_seed is not None):
+        dyn_thread_mapping_run(args)
+        return
+
     example()
-    # test_static_power()
-    # multi_program()
 
     # example_symmetric_perforation()
     # example_asymmetric_perforation()

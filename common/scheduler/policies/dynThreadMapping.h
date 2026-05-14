@@ -1,10 +1,12 @@
 #ifndef __DYN_THREAD_MAPPING_H
 #define __DYN_THREAD_MAPPING_H
+#include <random>
 #include <vector>
 #include "dvfspolicy.h"
 #include "migrationpolicy.h"
 #include "performance_counters.h"
 #include "neighbor_prediction.h"
+#include "ml_temperature_predictor.h"
 
 class DynThreadMapping : public DVFSPolicy, public MigrationPolicy {
 public:
@@ -12,14 +14,29 @@ DynThreadMapping(const PerformanceCounters *performanceCounters,
                 int coreRows, 
                 int coreColumns, 
                 std::string profile_path,
+                std::string thermal_model_path,
+                bool thermal_model_debug,
+                float predictionTemperatureBar,
+                float predictionSafetyMargin,
+                float migrationUtilizationDeltaThreshold,
+                float masterMigrationTemperatureDeltaThreshold,
+                unsigned long long masterMigrationCooldownNs,
                 float tolerance,
                 float dvfs_interval,
                 std::vector<float> core_states,
                 float dtmCriticalTemperature, 
-                float dtmRecoveredTemperature);
+                float dtmRecoveredTemperature,
+                bool sampleExplorationEnabled,
+                float sampleTargetMinTemperature,
+                float sampleTargetMaxTemperature,
+                float sampleMigrationProbability,
+                unsigned int sampleRandomSeed);
 
     virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies,const std::vector<bool> &activeCores);
     virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores);
+    bool hasLastTemperaturePrediction() const { return hasLastPredictedTemperatures; }
+    const std::vector<double> &getLastPredictedTemperatures() const { return lastPredictedTemperatures; }
+    const std::vector<int> &getLastPredictedFrequenciesMhz() const { return lastPredictedFrequenciesMhz; }
 
     struct Move {
         int core;
@@ -48,14 +65,32 @@ DynThreadMapping(const PerformanceCounters *performanceCounters,
 private:
     
     bool migrationOccured {false};
+    bool hasPendingCombinedFrequencies {false};
+    std::vector<int> pendingCombinedFrequencies;
+    bool hasLastPredictedTemperatures {false};
+    std::vector<double> lastPredictedTemperatures;
+    std::vector<int> lastPredictedFrequenciesMhz;
 
     const PerformanceCounters *performanceCounters{nullptr};
     unsigned int coreRows{0};
     unsigned int coreColumns{0};
     std::vector<float> core_states;
     NeighborPrediction pred;
+    MLTemperaturePredictor thermal_model;
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
+    float predictionTemperatureBar;
+    float predictionSafetyMargin;
+    float migrationUtilizationDeltaThreshold;
+    float masterMigrationTemperatureDeltaThreshold;
+    unsigned long long masterMigrationCooldownNs;
+    bool hasLastMasterMigration {false};
+    unsigned long long lastMasterMigrationNs {0};
+    bool sampleExplorationEnabled {false};
+    float sampleTargetMinTemperature {60.0f};
+    float sampleTargetMaxTemperature {90.0f};
+    float sampleMigrationProbability {0.5f};
+    std::mt19937 sampleRandomGenerator;
     float tolerance {5.0f};
 
     float thermalInertia {3.0f};
@@ -68,9 +103,12 @@ private:
     void get_lowest_freq(const std::vector<NeighborPrediction::PredictionMap>& predictions, const std::vector<bool>& activeCores, std::vector<int>& currentStatesIdx);
     void exchange();
     bool checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, const std::vector<int>& newFrequencies, const std::vector<bool> &activeCores);
+    float effectivePredictionTemperatureBar() const;
     double getMeasuredIPSBillions(unsigned int coreId);
 
     double calc_temperature(double current_temp_c, double equilibrium_temp_c, double interval_ms, double tau_ms);
     void logUtilizations(const std::vector<int> &coreIds);
+    void clearLastTemperaturePrediction();
+    void setLastTemperaturePrediction(const std::vector<double> &predictedTemps, const std::vector<int> &frequenciesMhz);
 };
 #endif

@@ -39,6 +39,20 @@ bool randomPriority; //Stores 1 if priority to be assigned randomly or 0 if prio
 int arrivalRate; //Stores the arrival rate of the workload from base.cfg.
 int arrivalInterval; //Stores the arrival interval of the workload from base.cfg.
 
+template <typename T>
+std::string joinThermalSampleVector(const std::vector<T> &values)
+{
+	std::ostringstream out;
+	out << std::setprecision(10);
+	for (size_t i = 0; i < values.size(); ++i) {
+		if (i > 0) {
+			out << ";";
+		}
+		out << values[i];
+	}
+	return out.str();
+}
+
 int numberOfTasks; //Stores the number of tasks in the open workload.
 int numberOfCores; //Stores the number of cores in the system.
 
@@ -189,6 +203,7 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 	for (int coreIterator=0; coreIterator < numberOfCores; coreIterator++) {
 		systemCores.push_back (coreIterator);
 	}
+	initThermalSampler();
 
 	//Initialize the task state array.
 	String benchmarks = Sim()->getCfg()->getString("traceinput/benchmarks");
@@ -273,14 +288,27 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 	
 	float criticalTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/cricital_temperature");
 	float recovery = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/recovered_temperature");
+	float predictionTemperatureBar = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/prediction_temperature_bar");
+	float predictionSafetyMargin = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/prediction_safety_margin");
+	float migrationUtilizationDeltaThreshold = Sim()->getCfg()->getFloat("scheduler/open/migration/DynThreadMapping/utilization_delta_threshold");
+	float masterMigrationTemperatureDeltaThreshold = Sim()->getCfg()->getFloat("scheduler/open/migration/DynThreadMapping/master_temperature_delta_threshold");
+	long long configuredMasterMigrationCooldownNs = Sim()->getCfg()->getInt("scheduler/open/migration/DynThreadMapping/master_cooldown_ns");
+	unsigned long long masterMigrationCooldownNs = configuredMasterMigrationCooldownNs > 0 ? static_cast<unsigned long long>(configuredMasterMigrationCooldownNs) : 0;
+	bool sampleExplorationEnabled = Sim()->getCfg()->getBool("scheduler/open/thermal_sampler/exploration_enabled");
+	float sampleTargetMinTemperature = Sim()->getCfg()->getFloat("scheduler/open/thermal_sampler/target_min_temperature");
+	float sampleTargetMaxTemperature = Sim()->getCfg()->getFloat("scheduler/open/thermal_sampler/target_max_temperature");
+	float sampleMigrationProbability = Sim()->getCfg()->getFloat("scheduler/open/thermal_sampler/migration_probability");
+	unsigned int sampleRandomSeed = Sim()->getCfg()->getInt("scheduler/open/thermal_sampler/random_seed");
 	float tolerance = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/tolerance");
 	String profile_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/profile_path");
+	String thermal_model_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/thermal_model_path");
+	bool thermal_model_debug = Sim()->getCfg()->getBool("scheduler/open/dvfs/DynThreadMapping/thermal_model_debug");
 	int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/DynThreadMapping/num_states");
 	vector<float> core_states;
 	for(int i =0;i<num_states;i++){
 		core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping/core_states", i));
 	}
-	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery);
+	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),std::string(thermal_model_path.c_str()),thermal_model_debug,predictionTemperatureBar,predictionSafetyMargin,migrationUtilizationDeltaThreshold,masterMigrationTemperatureDeltaThreshold,masterMigrationCooldownNs,tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery,sampleExplorationEnabled,sampleTargetMinTemperature,sampleTargetMaxTemperature,sampleMigrationProbability,sampleRandomSeed);
 
 	initMappingPolicy(Sim()->getCfg()->getString("scheduler/open/logic").c_str());
 	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
@@ -1213,9 +1241,6 @@ void SchedulerOpen::DVFSTransitionNotDelayed(int coreCounter) {
 void SchedulerOpen::setFrequency(int coreCounter, int frequency) {
 	int oldFrequency = Sim()->getMagicServer()->getFrequency(coreCounter);
 
-	if (frequency > oldFrequency + 1000) {
-		frequency = oldFrequency + 1000;
-	}
 	if (frequency < minFrequency) {
 		frequency = minFrequency;
 	}
@@ -1256,6 +1281,231 @@ void SchedulerOpen::initPerforationPolicy(String policyName, int taskCount)
 	}
 }
 
+void SchedulerOpen::initThermalSampler()
+{
+	thermalSampleEnabled = Sim()->getCfg()->getBool("scheduler/open/thermal_sampler/enabled");
+	thermalSampleDebug = Sim()->getCfg()->getBool("scheduler/open/thermal_sampler/debug");
+	hasThermalSampleStart = false;
+	thermalSampleCycle = 0;
+	thermalSampleEpoch = atol(Sim()->getCfg()->getString("scheduler/open/thermal_sampler/epoch").c_str());
+	if (thermalSampleEpoch <= 0) {
+		thermalSampleEpoch = dvfsEpoch;
+	}
+	thermalSampleNewFrequenciesMhz.clear();
+	thermalSamplePredictedTempsC.clear();
+
+	if (!thermalSampleEnabled) {
+		return;
+	}
+
+	thermalSamplePath = std::string(Sim()->getCfg()->getString("scheduler/open/thermal_sampler/path").c_str());
+	bool writeHeader = true;
+	{
+		std::ifstream existingSampleFile(thermalSamplePath.c_str());
+		writeHeader = !existingSampleFile.good() || existingSampleFile.peek() == std::ifstream::traits_type::eof();
+	}
+
+	thermalSampleFile.open(thermalSamplePath.c_str(), std::ios::out | std::ios::app);
+	if (!thermalSampleFile) {
+		std::cerr << "[Scheduler][ThermalSampler]: Warning failed to open "
+		          << thermalSamplePath << "; thermal sampling disabled" << std::endl;
+		thermalSampleEnabled = false;
+		return;
+	}
+
+	if (writeHeader) {
+		thermalSampleFile
+			<< "experiment,cycle,start_peak_temp_c,end_peak_temp_c,"
+			<< "old_frequencies_mhz,new_frequencies_mhz,active_cores,"
+			<< "predicted_core_temps_c,predicted_temp_errors_c,"
+			<< "start_core_temps_c,end_core_temps_c,"
+			<< "start_core_powers_w,end_core_powers_w,"
+			<< "start_core_utilizations,end_core_utilizations,"
+			<< "start_core_cpis,end_core_cpis,"
+			<< "start_core_rel_nuca_cpis,end_core_rel_nuca_cpis,"
+			<< "start_core_ips,end_core_ips,"
+			<< "start_core_task_ids,end_core_task_ids,"
+			<< "start_core_thread_ids,end_core_thread_ids\n";
+	}
+	std::cout << "[Scheduler][ThermalSampler]: appending samples to "
+	          << thermalSamplePath << " every " << thermalSampleEpoch << " ns" << std::endl;
+	if (thermalSampleDebug) {
+		std::cout << "[Scheduler][ThermalSampler]: debug enabled, logging predicted vs actual interval temperatures" << std::endl;
+	}
+}
+
+SchedulerOpen::ThermalSampleSnapshot SchedulerOpen::captureThermalSampleSnapshot(SubsecondTime time)
+{
+	ThermalSampleSnapshot snapshot;
+	snapshot.timeNs = time.getNS();
+	snapshot.frequenciesMhz.reserve(numberOfCores);
+	snapshot.activeCores.reserve(numberOfCores);
+	snapshot.threadActive.reserve(numberOfCores);
+	snapshot.taskIds.reserve(numberOfCores);
+	snapshot.threadIds.reserve(numberOfCores);
+	snapshot.tempsC.reserve(numberOfCores);
+	snapshot.powersW.reserve(numberOfCores);
+	snapshot.utilizations.reserve(numberOfCores);
+	snapshot.cpis.reserve(numberOfCores);
+	snapshot.relNucaCpis.reserve(numberOfCores);
+	snapshot.ips.reserve(numberOfCores);
+
+	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
+		snapshot.frequenciesMhz.push_back(Sim()->getMagicServer()->getFrequency(coreCounter));
+		const bool threadActive = isAssignedToThread(coreCounter);
+		snapshot.threadActive.push_back(threadActive ? 1 : 0);
+		snapshot.activeCores.push_back(threadActive ? 1 : 0);
+		snapshot.taskIds.push_back(systemCores.at(coreCounter).assignedTaskID);
+		snapshot.threadIds.push_back(systemCores.at(coreCounter).assignedThreadID);
+		snapshot.tempsC.push_back(performanceCounters->getTemperatureOfCore(coreCounter));
+		snapshot.powersW.push_back(performanceCounters->getPowerOfCore(coreCounter));
+		snapshot.utilizations.push_back(performanceCounters->getUtilizationOfCore(coreCounter));
+		snapshot.cpis.push_back(performanceCounters->getCPIOfCore(coreCounter));
+		snapshot.relNucaCpis.push_back(performanceCounters->getRelNUCACPIOfCore(coreCounter));
+		snapshot.ips.push_back(performanceCounters->getIPSOfCore(coreCounter));
+	}
+
+	return snapshot;
+}
+
+void SchedulerOpen::writeThermalSampleRow(const ThermalSampleSnapshot &start,
+                                          const ThermalSampleSnapshot &end,
+                                          const std::vector<int> &newFrequenciesMhz,
+                                          const std::vector<double> &predictedTempsC)
+{
+	if (!thermalSampleEnabled || !thermalSampleFile) {
+		return;
+	}
+
+	std::vector<int> frequencies = newFrequenciesMhz;
+	if (frequencies.size() != start.frequenciesMhz.size()) {
+		frequencies = end.frequenciesMhz;
+	}
+
+	auto hasInvalidTemps = [](const std::vector<double> &temps) {
+		for (double temp : temps) {
+			if (!std::isfinite(temp) || temp < 0.0) {
+				return true;
+			}
+		}
+		return temps.empty();
+	};
+
+	if (hasInvalidTemps(start.tempsC) || hasInvalidTemps(end.tempsC)) {
+		if (thermalSampleDebug) {
+			std::cout << "[Scheduler][ThermalSampler][Debug]: skipping interval "
+			          << start.timeNs << "ns->" << end.timeNs
+			          << "ns because temperature data is not initialized" << std::endl;
+		}
+		return;
+	}
+
+	const double startPeak = start.tempsC.empty() ? 0.0 : *std::max_element(start.tempsC.begin(), start.tempsC.end());
+	const double endPeak = end.tempsC.empty() ? 0.0 : *std::max_element(end.tempsC.begin(), end.tempsC.end());
+	const std::string experiment = Sim()->getCfg()->getString("traceinput/benchmarks").c_str();
+	const UInt64 cycle = thermalSampleCycle++;
+
+	std::vector<double> predictedTemps = predictedTempsC;
+	if (predictedTemps.size() != end.tempsC.size()) {
+		predictedTemps.assign(end.tempsC.size(), std::numeric_limits<double>::quiet_NaN());
+	}
+
+	std::vector<double> predictionErrors;
+	predictionErrors.reserve(end.tempsC.size());
+	for (size_t i = 0; i < end.tempsC.size(); ++i) {
+		double predictedTemp = i < predictedTemps.size() ? predictedTemps[i] : std::numeric_limits<double>::quiet_NaN();
+		double actualTemp = end.tempsC[i];
+		if (std::isfinite(predictedTemp) && std::isfinite(actualTemp)) {
+			predictionErrors.push_back(predictedTemp - actualTemp);
+		} else {
+			predictionErrors.push_back(std::numeric_limits<double>::quiet_NaN());
+		}
+	}
+
+	thermalSampleFile << "\"" << experiment << "\","
+	                  << cycle << ","
+	                  << startPeak << ","
+	                  << endPeak << ","
+	                  << "\"" << joinThermalSampleVector(start.frequenciesMhz) << "\","
+	                  << "\"" << joinThermalSampleVector(frequencies) << "\","
+	                  << "\"" << joinThermalSampleVector(start.activeCores) << "\","
+	                  << "\"" << joinThermalSampleVector(predictedTemps) << "\","
+	                  << "\"" << joinThermalSampleVector(predictionErrors) << "\","
+	                  << "\"" << joinThermalSampleVector(start.tempsC) << "\","
+	                  << "\"" << joinThermalSampleVector(end.tempsC) << "\","
+	                  << "\"" << joinThermalSampleVector(start.powersW) << "\","
+	                  << "\"" << joinThermalSampleVector(end.powersW) << "\","
+	                  << "\"" << joinThermalSampleVector(start.utilizations) << "\","
+	                  << "\"" << joinThermalSampleVector(end.utilizations) << "\","
+	                  << "\"" << joinThermalSampleVector(start.cpis) << "\","
+	                  << "\"" << joinThermalSampleVector(end.cpis) << "\","
+	                  << "\"" << joinThermalSampleVector(start.relNucaCpis) << "\","
+	                  << "\"" << joinThermalSampleVector(end.relNucaCpis) << "\","
+	                  << "\"" << joinThermalSampleVector(start.ips) << "\","
+	                  << "\"" << joinThermalSampleVector(end.ips) << "\","
+	                  << "\"" << joinThermalSampleVector(start.taskIds) << "\","
+	                  << "\"" << joinThermalSampleVector(end.taskIds) << "\","
+	                  << "\"" << joinThermalSampleVector(start.threadIds) << "\","
+	                  << "\"" << joinThermalSampleVector(end.threadIds) << "\"\n";
+	thermalSampleFile.flush();
+
+	if (thermalSampleDebug) {
+		std::cout << "[Scheduler][ThermalSampler][Debug]: cycle=" << cycle
+		          << " interval=" << start.timeNs << "ns->" << end.timeNs << "ns" << std::endl;
+		for (size_t core = 0; core < end.tempsC.size(); ++core) {
+			const int oldFreq = core < start.frequenciesMhz.size() ? start.frequenciesMhz[core] : -1;
+			const int newFreq = core < frequencies.size() ? frequencies[core] : -1;
+			const double startTemp = core < start.tempsC.size() ? start.tempsC[core] : std::numeric_limits<double>::quiet_NaN();
+			const double endTemp = end.tempsC[core];
+			const double predictedTemp = core < predictedTemps.size() ? predictedTemps[core] : std::numeric_limits<double>::quiet_NaN();
+			std::cout << "  core=" << core
+			          << " freq=" << oldFreq << "->" << newFreq << "MHz"
+			          << " temp=" << startTemp << "->" << endTemp << "C"
+			          << " actual_delta=" << (endTemp - startTemp) << "C";
+			if (std::isfinite(predictedTemp)) {
+				std::cout << " predicted_end=" << predictedTemp
+				          << "C error=" << (predictedTemp - endTemp) << "C";
+			} else {
+				std::cout << " predicted_end=NA";
+			}
+			std::cout << std::endl;
+		}
+	}
+}
+
+void SchedulerOpen::updateThermalSamplerBeforePolicies(SubsecondTime time)
+{
+	if (!thermalSampleEnabled || time.getNS() % thermalSampleEpoch != 0) {
+		return;
+	}
+
+	ThermalSampleSnapshot endSnapshot = captureThermalSampleSnapshot(time);
+	if (hasThermalSampleStart) {
+		writeThermalSampleRow(thermalSampleStart, endSnapshot, thermalSampleNewFrequenciesMhz, thermalSamplePredictedTempsC);
+	}
+	thermalSampleStart = endSnapshot;
+	thermalSampleNewFrequenciesMhz = endSnapshot.frequenciesMhz;
+	thermalSamplePredictedTempsC.clear();
+	hasThermalSampleStart = true;
+}
+
+void SchedulerOpen::updateThermalSamplerAfterPolicies()
+{
+	if (!thermalSampleEnabled || !hasThermalSampleStart) {
+		return;
+	}
+
+	thermalSampleNewFrequenciesMhz.clear();
+	thermalSampleNewFrequenciesMhz.reserve(numberOfCores);
+	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
+		thermalSampleNewFrequenciesMhz.push_back(Sim()->getMagicServer()->getFrequency(coreCounter));
+	}
+	thermalSamplePredictedTempsC.clear();
+	if (dynThdMap != NULL && dynThdMap->hasLastTemperaturePrediction()) {
+		thermalSamplePredictedTempsC = dynThdMap->getLastPredictedTemperatures();
+	}
+}
+
 /** executeDVFSPolicy
  * Set DVFS levels according to the used policy.
  */
@@ -1290,6 +1540,16 @@ void SchedulerOpen::executeMigrationPolicy(SubsecondTime time) {
 	std::vector<migration> migrations = migrationPolicy->migrate(time, taskIds, activeCores);
 
 	for (migration &migration : migrations) {
+		cout << "[Scheduler][MigrationApply]: time_ns=" << time.getNS()
+		     << " swap=" << (migration.swap ? "true" : "false")
+		     << " from_core=" << migration.fromCore
+		     << " to_core=" << migration.toCore
+		     << " from_task=" << systemCores.at(migration.fromCore).assignedTaskID
+		     << " from_thread=" << systemCores.at(migration.fromCore).assignedThreadID
+		     << " to_task=" << systemCores.at(migration.toCore).assignedTaskID
+		     << " to_thread=" << systemCores.at(migration.toCore).assignedThreadID
+		     << endl;
+
 		if (systemCores.at(migration.fromCore).assignedTaskID == -1) {
 			cout << "\n[Scheduler][Error]: Migration Policy ordered migration from unused core.\n";		
 			exit (1);
@@ -1360,6 +1620,11 @@ void SchedulerOpen::periodic(SubsecondTime time) {
 			cout <<"\n[Scheduler] [Error]: Task State Does Not Match.\n";		
 			exit (1);
 		}
+	}
+
+	const bool thermalSampleTick = thermalSampleEnabled && (time.getNS() % thermalSampleEpoch == 0);
+	if (thermalSampleTick) {
+		updateThermalSamplerBeforePolicies(time);
 	}
 
 	if ((migrationPolicy != NULL) && (time.getNS() % migrationEpoch == 0)) {
@@ -1444,6 +1709,10 @@ void SchedulerOpen::periodic(SubsecondTime time) {
 		else {
 			m_quantum_left[core_id] -= delta;
 		}
+	}
+
+	if (thermalSampleTick) {
+		updateThermalSamplerAfterPolicies();
 	}
 
 	m_last_periodic = time;

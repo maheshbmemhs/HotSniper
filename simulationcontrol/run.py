@@ -73,7 +73,13 @@ def apply_base_cfg_overrides(base_cfg_overrides):
         if key_match and not stripped.startswith('#') and current_section:
             full_key = '{}/{}'.format(current_section, key_match.group(1))
             if full_key in base_cfg_overrides:
-                line = '{} = {}'.format(key_match.group(1), format_base_cfg_value(base_cfg_overrides[full_key]))
+                comment_match = re.search(r'(\s+#.*)$', line)
+                trailing_comment = comment_match.group(1) if comment_match else ''
+                line = '{} = {}{}'.format(
+                    key_match.group(1),
+                    format_base_cfg_value(base_cfg_overrides[full_key]),
+                    trailing_comment,
+                )
                 updated.add(full_key)
 
         output.append(line)
@@ -448,6 +454,12 @@ def dyn_thread_mapping_run(args):
         base_cfg_overrides['scheduler/open/migration/DynThreadMapping/master_temperature_delta_threshold'] = args.master_migration_temp_delta
     if args.master_migration_cooldown_ns is not None:
         base_cfg_overrides['scheduler/open/migration/DynThreadMapping/master_cooldown_ns'] = args.master_migration_cooldown_ns
+    if args.migration_epoch_ns is not None:
+        base_cfg_overrides['scheduler/open/migration/epoch'] = args.migration_epoch_ns
+    if args.dvfs_epoch_ns is not None:
+        base_cfg_overrides['scheduler/open/dvfs/dvfs_epoch'] = args.dvfs_epoch_ns
+    if args.thermal_sample_epoch_ns is not None:
+        base_cfg_overrides['scheduler/open/thermal_sampler/epoch'] = args.thermal_sample_epoch_ns
     if args.thermal_sample_file:
         base_cfg_overrides['scheduler/open/thermal_sampler/path'] = args.thermal_sample_file
     if args.thermal_sample_min_temp is not None:
@@ -491,8 +503,14 @@ def main():
                         help='Minimum current-vs-target core temperature delta required for master-only migration.')
     parser.add_argument('--master-migration-cooldown-ns', type=int, default=None,
                         help='Cooldown in ns between master-only migrations.')
+    parser.add_argument('--migration-epoch-ns', type=int, default=None,
+                        help='Migration policy epoch in ns.')
+    parser.add_argument('--dvfs-epoch-ns', type=int, default=None,
+                        help='DynThreadMapping DVFS policy epoch in ns.')
     parser.add_argument('--thermal-sample-file', default=None,
                         help='Enable scheduler thermal sampling and write interval CSV rows to this path.')
+    parser.add_argument('--thermal-sample-epoch-ns', type=int, default=None,
+                        help='Thermal sampler interval in ns; should match the policy epoch used for training.')
     parser.add_argument('--thermal-sample-debug', action='store_true',
                         help='Print predicted-vs-actual temperature and old/new frequency for each thermal sample interval.')
     parser.add_argument('--thermal-sample-random', action='store_true',
@@ -534,7 +552,10 @@ def main():
             or args.migration_utilization_delta_threshold is not None
             or args.master_migration_temp_delta is not None
             or args.master_migration_cooldown_ns is not None
+            or args.migration_epoch_ns is not None
+            or args.dvfs_epoch_ns is not None
             or args.thermal_sample_file
+            or args.thermal_sample_epoch_ns is not None
             or args.thermal_sample_debug
             or args.thermal_sample_random
             or args.thermal_sample_min_temp is not None

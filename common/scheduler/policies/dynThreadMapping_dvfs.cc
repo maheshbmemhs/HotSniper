@@ -8,6 +8,7 @@ DynThreadMapping::DynThreadMapping(const PerformanceCounters *performanceCounter
                                    int coreRows, 
                                    int coreColumns, 
                                    std::string profile_path,
+                                   std::string thermal_model_path,
                                    float tolerance_,
                                    float dvfs_interval,
                                    std::vector<float> core_states_,
@@ -21,7 +22,8 @@ pred(profile_path),
 dtmCriticalTemperature(dtmCriticalTemperature),
 dtmRecoveredTemperature(dtmRecoveredTemperature),
 tolerance(tolerance_),
-dvfsInterval(dvfs_interval) {
+dvfsInterval(dvfs_interval),
+thermal_model(thermal_model_path,true) {
     std::string s_core_states = "[";
     for(float f:core_states){
         s_core_states+=std::to_string(f)+", ";
@@ -34,6 +36,7 @@ dvfsInterval(dvfs_interval) {
     << "\n dvfs interval: " << dvfsInterval
     << "\n states: " << s_core_states << "]"
     << std::endl;
+    
 }
 
 std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFrequencies, const std::vector<bool> &activeCores) {
@@ -63,58 +66,16 @@ std::vector<int> DynThreadMapping::getFrequencies(const std::vector<int> &oldFre
         // Tracks the index into core_state, used to increment between states
         std::vector<int> currentStatesIdx(coreRows * coreColumns,core_states.size()-1); // Initialization: start with highest possible frequency, last index in the core states
         
-        // Get Predictions for each of the active cores
-        std::vector<NeighborPrediction::PredictionMap> predictions;
-
-        for(size_t i =0;i<(coreRows * coreColumns);i++){
-            if(activeCores.at(i)){
-                float current_ips = getMeasuredIPSBillions(i);
-                // Thread is doing next to nothing, give it predictions that make it ignored in any moves
-                if(current_ips <= 0.1){
-                    std::cout << "[Scheduler][DynThreadMapping]: Warning IPS of core "<<i<<" is near zero, using ignored predictions"<< std::endl;
-                    NeighborPrediction::PredictionMap temp;
-                    for(float state: core_states){
-                        temp.emplace(state,NeighborPrediction::core_status{"none",0.0f,0.0f,0.0f,0.0f,0.0f});
-                    }
-                    predictions.push_back(temp);
-                    currentStatesIdx[i]=0; // If we cant predict states accurately set core to lowest freq to be safe
-                } else{
-                    float current_state = float(oldFrequencies[i])/1000.0f; // Mhz to GHz
-                    predictions.push_back(pred.getNearestBenchmark(current_state,current_ips));
-                }
-            }else{
-                predictions.push_back({});
-                currentStatesIdx[i]=0; // Inactive, set to lowest freq
-            }
-        }
-        
-        /*bool failed = false;
-        while(!checkConstraints(predictions,currentStatesIdx,activeCores)){
-            auto best = get_best_move(predictions,currentStatesIdx,activeCores);
-            if(best.score==0.0f){ // No more moves but constraints are not met
-                std::cout << "[Scheduler][DynThreadMapping]: Failed to find core states that meet constraints"<< std::endl;
-                failed = true;
-                break;
-            }
-            // Update core state index
-            std::cout << "[Scheduler][DynThreadMapping]: Move Core "<<best.core<< " frequency from " <<core_states[best.from_state]<<" GHz to " << core_states[best.to_state]<<" GHz"<< std::endl;
-            currentStatesIdx[best.core]=best.to_state;
-
-        }
-        if(!failed){
-            std::cout << "[Scheduler][DynThreadMapping]: Completed DVFS"<< std::endl;
-        }*/
-        get_lowest_freq(predictions,activeCores,currentStatesIdx);
+        // Find best freq
+        get_max_freq(activeCores,currentStatesIdx);
         std::cout << "[Scheduler][DynThreadMapping]: Final States "<< std::endl;
 
         // Update core frequency
         for(size_t i=0;i<(coreRows * coreColumns);i++){
             newFrequencies[i]=int(1000*core_states[currentStatesIdx[i]]);
             double cur_temp = performanceCounters->getTemperatureOfCore(i);
-            double nn_pred_temp = predictions[i][core_states[currentStatesIdx[i]]].temp;
             std::cout << "[Scheduler][DynThreadMapping]: core "<< i << ": freq "<<core_states[currentStatesIdx[i]] 
-                      <<" temp "<<cur_temp<<" -> "<<nn_pred_temp<<" = "<<calc_temperature(cur_temp,nn_pred_temp,dvfsInterval,thermalInertia)<< std::endl;
-
+                      <<" GHz, current temp "<<cur_temp<< std::endl;
         }
         return newFrequencies;
     } else{
@@ -171,24 +132,102 @@ DynThreadMapping::Move DynThreadMapping::get_best_move(const std::vector<Neighbo
     return best_move;
 }
 
-void DynThreadMapping::get_lowest_freq(const std::vector<NeighborPrediction::PredictionMap>& predictions,
-                     const std::vector<bool>& activeCores,
-                     std::vector<int>& currentStatesIdx){
+void DynThreadMapping::get_max_freq(const std::vector<bool>& activeCores,
+                                       std::vector<int>& currentStatesIdx){
+    if(!thermal_model.isLoaded()){
+        std::cerr<<"Model not loaded, using lowest freq" << std::endl;
+        std::fill(currentStatesIdx.begin(),currentStatesIdx.end(),1);
+    }
+    const size_t numCores = coreRows * coreColumns;
+    std::vector<double> currentTemps(numCores, 0.0);
+    std::vector<double> currentFreqs(numCores, 0.0);
+    std::vector<double> ips(numCores, 0.0);
+    std::vector<double> utilizations(numCores, 0.0);
+    std::vector<double> cpis(numCores, 0.0);
+    std::vector<double> relNucaCpis(numCores, 0.0);
+    std::vector<double> powers(numCores, 0.0);
 
+    for(size_t core = 0; core < numCores; core++){
+        currentTemps[core] = performanceCounters->getTemperatureOfCore(core);
+        powers[core] = performanceCounters->getPowerOfCore(core);
+        utilizations[core] = performanceCounters->getUtilizationOfCore(core);
+        cpis[core] = performanceCounters->getCPIOfCore(core);
+        relNucaCpis[core] = performanceCounters->getRelNUCACPIOfCore(core);
+        ips[core] = performanceCounters->getIPSOfCore(core);
+        double old_freq_mhz = performanceCounters->getFreqOfCore(core);
+        currentFreqs[core] = old_freq_mhz > 0.0 ? old_freq_mhz / 1000.0 : 0.0;
+    }
+    std::vector<double> expectedIps = ips;
+    std::vector<double> expectedCpis = cpis;
+    std::vector<double> expectedPowers = powers;
+    std::vector<double> expectedUtilizations = utilizations;
+    //expectedIps[i] = scaledForCandidateFrequency(ips[i], currentFreqs[i], state);
+    //expectedCpis[i] = cpis[i];
+    //expectedPowers[i] = scaledForCandidateFrequency(powers[i], currentFreqs[i], state);
     for(size_t i = 0;i<currentStatesIdx.size(); i++){
         if(activeCores.at(i)){
             // Cant go any lower than this state
             if(!currentStatesIdx[i]){
                 continue;
             }
-            auto prediction = predictions[i];
-            double pred_temp = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[core_states[currentStatesIdx[i]]].temp,dvfsInterval,thermalInertia);
-            while(pred_temp>=dtmCriticalTemperature+tolerance){
-                std::cerr<<"Lowering core " <<i<<" freq from " <<core_states[currentStatesIdx[i]] << " GHz to " << core_states[currentStatesIdx[i]-1] << " Ghz" << std::endl;
-                currentStatesIdx[i]-=1;
-                float new_state = core_states[currentStatesIdx[i]];
-                pred_temp = calc_temperature(performanceCounters->getTemperatureOfCore(i),prediction[new_state].temp,dvfsInterval,thermalInertia);
+
+            // Ignore low IPS cores
+            if(ips[i]<=(0.1*1e9)){
+                std::cout << "[Scheduler][DynThreadMapping][DVFS]: Warning IPS of core "<<i<<" is near zero, ignoring for predictions"<< std::endl;
+                currentStatesIdx[i]=0;
+                continue;
             }
+
+            // Candidate frequencies 
+            std::vector<double> candidateFreq = currentFreqs;
+            for(size_t j = 0;j<=i;j++){
+                candidateFreq[j]=core_states[currentStatesIdx[j]];
+            }
+
+            double pred_temp = thermal_model.predictNextTemp(i,
+                            currentTemps,
+                            currentFreqs,
+                            candidateFreq,
+                            ips,
+                            utilizations,
+                            cpis,
+                            relNucaCpis,
+                            powers,
+                            activeCores,
+	                            true,
+	                            &expectedIps,
+	                            &expectedCpis,
+	                            &expectedPowers,
+	                            &expectedUtilizations,
+	                            &activeCores);
+             
+            // Keep lowering frequencies until we get a predicted temp lower than critical temp
+            while(pred_temp>=dtmCriticalTemperature+tolerance){
+                std::cerr<<"[Scheduler][DynThreadMapping][DVFS]: Predicted temp: "<<pred_temp<<" C. Lowering core " <<i<<" freq from " <<core_states[currentStatesIdx[i]] << " GHz to " << core_states[currentStatesIdx[i]-1] << " Ghz" << std::endl;
+                currentStatesIdx[i]-=1;
+                double new_state = core_states[currentStatesIdx[i]];
+                candidateFreq[i]=new_state;
+                pred_temp = thermal_model.predictNextTemp(i,
+                            currentTemps,
+                            currentFreqs,
+                            candidateFreq,
+                            ips,
+                            utilizations,
+                            cpis,
+                            relNucaCpis,
+                            powers,
+                            activeCores,
+	                            true,
+	                            &expectedIps,
+	                            &expectedCpis,
+	                            &expectedPowers,
+	                            &expectedUtilizations,
+	                            &activeCores);
+            }
+            std::cerr<<"[Scheduler][DynThreadMapping][DVFS]: Core "<<i<<" final predicted temp: "<< pred_temp << std::endl;
+
+        }else{
+            currentStatesIdx[i]=0; // Inactive core
         }
     }
 }
@@ -210,6 +249,7 @@ double DynThreadMapping::getMeasuredIPSBillions(unsigned int coreId) {
     return 0.0;
 }
 
+// Old Not used
 bool DynThreadMapping::checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, 
                                              const std::vector<int>& currentStateIdx, 
                                              const std::vector<bool>& activeCores){
@@ -247,6 +287,7 @@ bool DynThreadMapping::throttle() {
     return in_throttle_mode;
 }
 
+// Old Not used, used to predict temps with NN
 double DynThreadMapping::calc_temperature(double current_temp_c, double equilibrium_temp_c, double interval_ms, double tau_ms){
     // Exponential decay factor
     double alpha = 1.0 - std::exp(-interval_ms / tau_ms);

@@ -275,12 +275,13 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 	float recovery = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/recovered_temperature");
 	float tolerance = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/tolerance");
 	String profile_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/profile_path");
+	String thermal_model_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/thermal_model_path");
 	int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/DynThreadMapping/num_states");
 	vector<float> core_states;
 	for(int i =0;i<num_states;i++){
 		core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping/core_states", i));
 	}
-	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery);
+	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),std::string(thermal_model_path.c_str()),tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery);
 
 	initMappingPolicy(Sim()->getCfg()->getString("scheduler/open/logic").c_str());
 	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());

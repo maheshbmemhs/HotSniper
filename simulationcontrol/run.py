@@ -382,6 +382,10 @@ def mulitprog_fixedfreqmigration_demo():
 def fixedfreqmigration_demo():
     run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
+
+def fixedfreqlpthermal_demo():
+    run(['{:.1f}GHz'.format(4), 'fixedFreq', 'lpThermalRounding', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
+
 def example_symmetric_perforation():
     for benchmark in (
                       'parsec-blackscholes',
@@ -462,7 +466,7 @@ def main():
     # ondemand_demo()
     # coldestcore_demo()
     # combined_demo()
-    fixedfreqmigration_demo()
+    fixedfreqlpthermal_demo()
     # ondemand_multiprogram_demo()
     # coldestcore_multiprogram_demo()
     # mulitprog_fixedfreqmigration_demo()

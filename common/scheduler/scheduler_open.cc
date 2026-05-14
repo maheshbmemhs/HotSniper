@@ -23,6 +23,7 @@
 #include "policies/migrationAt50Percent.h"
 #include "policies/migrationSota.h"
 #include "policies/coldestCore.h"
+#include "policies/lpThermalRounding.h"
 #include "policies/dvfsfixedfreq.h"
 #include "policies/dynThreadMapping_dvfs.h"
 
@@ -417,6 +418,25 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 	} else if (policyName == "migrationSota") {
 		float criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/migrationSota/criticalTemperature");
 		migrationPolicy = new migrationSota(performanceCounters, coreRows, coreColumns, criticalTemperature);
+	} else if (policyName == "lpThermalRounding") {
+		double targetIps = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/target_ips");
+		double alpha = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/alpha");
+		double beta = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/beta");
+		double gamma = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/gamma");
+		double lambdaTemp = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/lambda_temp");
+		double criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/criticalTemperature");
+		double minTemperatureDelta = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/minTemperatureDelta");
+		migrationPolicy = new LpThermalRounding(
+			performanceCounters,
+			coreRows,
+			coreColumns,
+			targetIps,
+			alpha,
+			beta,
+			gamma,
+			lambdaTemp,
+			criticalTemperature,
+			minTemperatureDelta);
 	}
 	//else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {

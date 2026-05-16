@@ -426,6 +426,11 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 		double lambdaTemp = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/lambda_temp");
 		double criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/criticalTemperature");
 		double minTemperatureDelta = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/minTemperatureDelta");
+		UInt64 migrationCooldownNs = Sim()->getCfg()->getInt("scheduler/open/migration/lpThermalRounding/migrationCooldownNs");
+		double hysteresisTemperatureDelta = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/hysteresisTemperatureDelta");
+		double ambientTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/ambientTemperature");
+		double thermalResistance = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/thermalResistance");
+		double thermalGuardBand = Sim()->getCfg()->getFloat("scheduler/open/migration/lpThermalRounding/thermalGuardBand");
 		migrationPolicy = new LpThermalRounding(
 			performanceCounters,
 			coreRows,
@@ -436,7 +441,12 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 			gamma,
 			lambdaTemp,
 			criticalTemperature,
-			minTemperatureDelta);
+			minTemperatureDelta,
+			migrationCooldownNs,
+			hysteresisTemperatureDelta,
+			ambientTemperature,
+			thermalResistance,
+			thermalGuardBand);
 	}
 	//else if (policyName ="XYZ") {... } //Place to instantiate a new migration logic. Implementation is put in "policies" package.
 	else {

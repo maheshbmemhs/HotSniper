@@ -25,7 +25,12 @@ public:
         double gamma,
         double lambdaTemp,
         double criticalTemperature,
-        double minTemperatureDelta);
+        double minTemperatureDelta,
+        UInt64 migrationCooldownNs,
+        double hysteresisTemperatureDelta,
+        double ambientTemperature,
+        double thermalResistance,
+        double thermalGuardBand);
 
     virtual std::vector<migration> migrate(
         SubsecondTime time,
@@ -43,6 +48,12 @@ private:
     double lambdaTemp;
     double criticalTemperature;
     double minTemperatureDelta;
+    UInt64 migrationCooldownNs;
+    double hysteresisTemperatureDelta;
+    double ambientTemperature;
+    double thermalResistance;
+    double thermalGuardBand;
+    std::vector<UInt64> lastMigrationNs;
 
     std::vector<std::vector<double> > solveLpRelaxation(
         const std::vector<std::vector<double> > &throughput,
@@ -61,10 +72,18 @@ private:
         const std::vector<double> &temperature,
         double throughputRequirement) const;
 
+    void thermalSwap(
+        std::vector<int> &assignment,
+        const std::vector<std::vector<double> > &power,
+        const std::vector<double> &temperature) const;
+
     std::vector<migration> createMigrations(
         const std::vector<int> &sourceCores,
         const std::vector<int> &targetCores,
-        const std::vector<int> &assignment) const;
+        const std::vector<int> &assignment,
+        const std::vector<double> &temperature,
+        const std::vector<std::vector<double> > &power,
+        UInt64 nowNs);
 
     std::vector<int> greedyAssignment(
         const std::vector<std::vector<double> > &score) const;
@@ -85,7 +104,24 @@ private:
     double measuredPower(unsigned int coreId) const;
     double measuredTemperature(unsigned int coreId) const;
     double frequencyScale(unsigned int fromCore, unsigned int toCore) const;
+    bool migrationPassesHysteresis(
+        const migration &migration,
+        const std::vector<double> &temperature,
+        double sourcePredictedTemperature,
+        double targetPredictedTemperature,
+        UInt64 nowNs) const;
+    void recordMigrations(
+        const std::vector<migration> &migrations,
+        UInt64 nowNs);
+    bool coreCoolingDown(unsigned int coreId, UInt64 nowNs) const;
     bool finiteAndPositive(double value) const;
+    double effectiveCriticalTemperature() const;
+    double predictedTemperature(
+        double instantaneousTemperature,
+        double predictedPower) const;
+    double projectedCoreTemperature(
+        double instantaneousTemperature,
+        double threadPower) const;
 };
 
 #endif

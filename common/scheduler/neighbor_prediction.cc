@@ -49,6 +49,7 @@ NeighborPrediction::NeighborPrediction(std::string benchmark_path){
  * 
  */
 std::unordered_map<float,NeighborPrediction::core_status> NeighborPrediction::getNearestBenchmark(float core_state, float ips){
+    core_state = std::round(core_state * 2.0f) / 2.0f;
     if(!states.count(core_state)){
         std::cerr << "[NeighborPrediction] Could not find core state " << core_state << " in benchmark data" << std::endl;
         throw std::logic_error("Invalid core state");
@@ -63,7 +64,7 @@ std::unordered_map<float,NeighborPrediction::core_status> NeighborPrediction::ge
             min = diff;
         }
     }
-    std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
+    // std::cerr << "[NeighborPrediction] Nearest benchmark for IPS "<<ips<<" at state " << core_state <<"GHz is " << nearest_benchmark << std::endl;
     return benchmarks[nearest_benchmark];
 }
 

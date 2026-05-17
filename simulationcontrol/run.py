@@ -484,88 +484,90 @@ def dyn_thread_mapping_run(args):
         base_cfg_overrides=base_cfg_overrides,
     )
 
+def fixedfreqmigrationimp_demo():
+    run(['{:.1f}GHz'.format(4), 'DynThreadMapping','migration_imp', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--h1', action='store_true',
-                        help='Alias for the default DynThreadMapping experiment.')
-    parser.add_argument('--dyn-thread-mapping', action='store_true',
-                        help='Run the default DynThreadMapping experiment.')
-    parser.add_argument('--thermal-model-file', default=None,
-                        help='C++ text model path for scheduler/open/dvfs/DynThreadMapping/thermal_model_path.')
-    parser.add_argument('--prediction-temperature-bar', type=float, default=None,
-                        help='Upper bound for predicted candidate temperature before DynThreadMapping will lower frequency.')
-    parser.add_argument('--prediction-safety-margin', type=float, default=None,
-                        help='Conservative margin subtracted from prediction-temperature-bar when testing candidate safety.')
-    parser.add_argument('--migration-utilization-delta-threshold', type=float, default=None,
-                        help='Minimum high-vs-low core utilization delta required before DynThreadMapping migration moves threads.')
-    parser.add_argument('--master-migration-temp-delta', type=float, default=None,
-                        help='Minimum current-vs-target core temperature delta required for master-only migration.')
-    parser.add_argument('--master-migration-cooldown-ns', type=int, default=None,
-                        help='Cooldown in ns between master-only migrations.')
-    parser.add_argument('--migration-epoch-ns', type=int, default=None,
-                        help='Migration policy epoch in ns.')
-    parser.add_argument('--dvfs-epoch-ns', type=int, default=None,
-                        help='DynThreadMapping DVFS policy epoch in ns.')
-    parser.add_argument('--thermal-sample-file', default=None,
-                        help='Enable scheduler thermal sampling and write interval CSV rows to this path.')
-    parser.add_argument('--thermal-sample-epoch-ns', type=int, default=None,
-                        help='Thermal sampler interval in ns; should match the policy epoch used for training.')
-    parser.add_argument('--thermal-sample-debug', action='store_true',
-                        help='Print predicted-vs-actual temperature and old/new frequency for each thermal sample interval.')
-    parser.add_argument('--thermal-sample-random', action='store_true',
-                        help='Randomize migration and frequencies while thermal sampling.')
-    parser.add_argument('--thermal-sample-min-temp', type=float, default=None,
-                        help='Lower target temperature for random thermal sampling.')
-    parser.add_argument('--thermal-sample-max-temp', type=float, default=None,
-                        help='Upper target temperature for random thermal sampling.')
-    parser.add_argument('--thermal-sample-migration-probability', type=float, default=None,
-                        help='Probability of applying a random migration permutation in thermal sample random mode.')
-    parser.add_argument('--thermal-sample-random-seed', type=int, default=None,
-                        help='Random seed for thermal sample random mode.')
-    parser.add_argument('--profile-file', default=None,
-                        help='Profile file path for NeighborPrediction.')
-    parser.add_argument('--thermal-model-debug', action='store_true',
-                        help='Print every ML temperature prediction.')
-    parser.add_argument('--reserved-cores-active', action='store_true',
-                        help='Treat task-reserved cores as active for DynThreadMapping DVFS.')
-    parser.add_argument('--disable-migration', action='store_true',
-                        help='Disable DynThreadMapping migration so DVFS prediction runs every epoch.')
-    parser.add_argument('--benchmark', default='parsec-blackscholes')
-    parser.add_argument('--parallelism', type=int, default=3)
-    parser.add_argument('--input-set', default='simsmall')
-    parser.add_argument('--frequency', type=float, default=3.0)
-    parser.add_argument('--dvfs-speed', default='slowDVFS')
-    parser.add_argument('--ignore-error', action='store_true')
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--h1', action='store_true',
+    #                     help='Alias for the default DynThreadMapping experiment.')
+    # parser.add_argument('--dyn-thread-mapping', action='store_true',
+    #                     help='Run the default DynThreadMapping experiment.')
+    # parser.add_argument('--thermal-model-file', default=None,
+    #                     help='C++ text model path for scheduler/open/dvfs/DynThreadMapping/thermal_model_path.')
+    # parser.add_argument('--prediction-temperature-bar', type=float, default=None,
+    #                     help='Upper bound for predicted candidate temperature before DynThreadMapping will lower frequency.')
+    # parser.add_argument('--prediction-safety-margin', type=float, default=None,
+    #                     help='Conservative margin subtracted from prediction-temperature-bar when testing candidate safety.')
+    # parser.add_argument('--migration-utilization-delta-threshold', type=float, default=None,
+    #                     help='Minimum high-vs-low core utilization delta required before DynThreadMapping migration moves threads.')
+    # parser.add_argument('--master-migration-temp-delta', type=float, default=None,
+    #                     help='Minimum current-vs-target core temperature delta required for master-only migration.')
+    # parser.add_argument('--master-migration-cooldown-ns', type=int, default=None,
+    #                     help='Cooldown in ns between master-only migrations.')
+    # parser.add_argument('--migration-epoch-ns', type=int, default=None,
+    #                     help='Migration policy epoch in ns.')
+    # parser.add_argument('--dvfs-epoch-ns', type=int, default=None,
+    #                     help='DynThreadMapping DVFS policy epoch in ns.')
+    # parser.add_argument('--thermal-sample-file', default=None,
+    #                     help='Enable scheduler thermal sampling and write interval CSV rows to this path.')
+    # parser.add_argument('--thermal-sample-epoch-ns', type=int, default=None,
+    #                     help='Thermal sampler interval in ns; should match the policy epoch used for training.')
+    # parser.add_argument('--thermal-sample-debug', action='store_true',
+    #                     help='Print predicted-vs-actual temperature and old/new frequency for each thermal sample interval.')
+    # parser.add_argument('--thermal-sample-random', action='store_true',
+    #                     help='Randomize migration and frequencies while thermal sampling.')
+    # parser.add_argument('--thermal-sample-min-temp', type=float, default=None,
+    #                     help='Lower target temperature for random thermal sampling.')
+    # parser.add_argument('--thermal-sample-max-temp', type=float, default=None,
+    #                     help='Upper target temperature for random thermal sampling.')
+    # parser.add_argument('--thermal-sample-migration-probability', type=float, default=None,
+    #                     help='Probability of applying a random migration permutation in thermal sample random mode.')
+    # parser.add_argument('--thermal-sample-random-seed', type=int, default=None,
+    #                     help='Random seed for thermal sample random mode.')
+    # parser.add_argument('--profile-file', default=None,
+    #                     help='Profile file path for NeighborPrediction.')
+    # parser.add_argument('--thermal-model-debug', action='store_true',
+    #                     help='Print every ML temperature prediction.')
+    # parser.add_argument('--reserved-cores-active', action='store_true',
+    #                     help='Treat task-reserved cores as active for DynThreadMapping DVFS.')
+    # parser.add_argument('--disable-migration', action='store_true',
+    #                     help='Disable DynThreadMapping migration so DVFS prediction runs every epoch.')
+    # parser.add_argument('--benchmark', default='parsec-blackscholes')
+    # parser.add_argument('--parallelism', type=int, default=3)
+    # parser.add_argument('--input-set', default='simsmall')
+    # parser.add_argument('--frequency', type=float, default=3.0)
+    # parser.add_argument('--dvfs-speed', default='slowDVFS')
+    # parser.add_argument('--ignore-error', action='store_true')
 
-    args = parser.parse_args()
+    # args = parser.parse_args()
 
-    if len(sys.argv) == 1:
-        example()
-        # test_static_power()
-        # multi_program()
-        return
+    # if len(sys.argv) == 1:
+    #     example()
+    #     # test_static_power()
+    #     # multi_program()
+    #     return
 
-    if (args.h1 or args.dyn_thread_mapping or args.thermal_model_file or args.profile_file
-            or args.prediction_temperature_bar is not None
-            or args.prediction_safety_margin is not None
-            or args.migration_utilization_delta_threshold is not None
-            or args.master_migration_temp_delta is not None
-            or args.master_migration_cooldown_ns is not None
-            or args.migration_epoch_ns is not None
-            or args.dvfs_epoch_ns is not None
-            or args.thermal_sample_file
-            or args.thermal_sample_epoch_ns is not None
-            or args.thermal_sample_debug
-            or args.thermal_sample_random
-            or args.thermal_sample_min_temp is not None
-            or args.thermal_sample_max_temp is not None
-            or args.thermal_sample_migration_probability is not None
-            or args.thermal_sample_random_seed is not None):
-        dyn_thread_mapping_run(args)
-        return
+    # if (args.h1 or args.dyn_thread_mapping or args.thermal_model_file or args.profile_file
+    #         or args.prediction_temperature_bar is not None
+    #         or args.prediction_safety_margin is not None
+    #         or args.migration_utilization_delta_threshold is not None
+    #         or args.master_migration_temp_delta is not None
+    #         or args.master_migration_cooldown_ns is not None
+    #         or args.migration_epoch_ns is not None
+    #         or args.dvfs_epoch_ns is not None
+    #         or args.thermal_sample_file
+    #         or args.thermal_sample_epoch_ns is not None
+    #         or args.thermal_sample_debug
+    #         or args.thermal_sample_random
+    #         or args.thermal_sample_min_temp is not None
+    #         or args.thermal_sample_max_temp is not None
+    #         or args.thermal_sample_migration_probability is not None
+    #         or args.thermal_sample_random_seed is not None):
+    #     dyn_thread_mapping_run(args)
+    #     return
 
-    example()
+    fixedfreqmigrationimp_demo()
 
     # example_symmetric_perforation()
     # example_asymmetric_perforation()

@@ -17,8 +17,10 @@
 #include "policies/dvfsFixedPower.h"
 #include "policies/dvfsTSP.h"
 #include "policies/dvfsTestStaticPower.h"
+#include "dvfsfixedfreq.h"
 #include "policies/mapFirstUnused.h"
 #include "policies/pcgov.h"
+#include "policies/migration_imp.h"
 
 #include <iomanip>
 #include <random>
@@ -387,7 +389,16 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 		dvfsPolicy = new DVFSTSP(thermalModel, performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize);
 	} else if(policyName == "DynThreadMapping"){
 		dvfsPolicy = dynThdMap;
-	} else {
+	}else if (policyName == "fixedFreq") {
+		dvfsPolicy = new DVFSFixedFreq(
+			performanceCounters,
+			coreRows,
+			coreColumns,
+			minFrequency,
+			maxFrequency
+		);
+	}
+	else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);
 	}
@@ -402,6 +413,9 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 		migrationPolicy = NULL;
 	} else if(policyName == "DynThreadMapping") {
 		migrationPolicy = dynThdMap;
+	} else if(policyName == "migration_imp") {
+		float criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/migration_imp/critical_temperature");
+		migrationPolicy = new MigrationImp(performanceCounters, coreRows, coreColumns, criticalTemperature);
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
  		exit (1);

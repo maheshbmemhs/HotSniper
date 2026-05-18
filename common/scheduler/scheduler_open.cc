@@ -309,6 +309,11 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 		core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping/core_states", i));
 	}
 	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),std::string(thermal_model_path.c_str()),thermal_model_debug,predictionTemperatureBar,predictionSafetyMargin,migrationUtilizationDeltaThreshold,masterMigrationTemperatureDeltaThreshold,masterMigrationCooldownNs,tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery,sampleExplorationEnabled,sampleTargetMinTemperature,sampleTargetMaxTemperature,sampleMigrationProbability,sampleRandomSeed);
+	std::vector<std::string> dynThreadMappingTaskNames;
+	for (int taskIterator = 0; taskIterator < numberOfTasks; taskIterator++) {
+		dynThreadMappingTaskNames.push_back(std::string(openTasks[taskIterator].taskName.c_str()));
+	}
+	dynThdMap->setTaskNames(dynThreadMappingTaskNames);
 
 	initMappingPolicy(Sim()->getCfg()->getString("scheduler/open/logic").c_str());
 	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
@@ -1512,10 +1517,15 @@ void SchedulerOpen::updateThermalSamplerAfterPolicies()
 void SchedulerOpen::executeDVFSPolicy() {
 	std::vector<int> oldFrequencies;
 	std::vector<bool> activeCores;
+	std::vector<int> taskIds;
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
 		oldFrequencies.push_back(Sim()->getMagicServer()->getFrequency(coreCounter));
 	    static bool reserved_cores_are_active = Sim()->getCfg()->getBool("scheduler/open/dvfs/reserved_cores_are_active");
 		activeCores.push_back(reserved_cores_are_active ? isAssignedToTask(coreCounter) : isAssignedToThread(coreCounter));
+		taskIds.push_back(systemCores.at(coreCounter).assignedTaskID);
+	}
+	if (dynThdMap != NULL) {
+		dynThdMap->setCurrentTaskIds(taskIds);
 	}
 	vector<int> frequencies = dvfsPolicy->getFrequencies(oldFrequencies, activeCores);
 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {

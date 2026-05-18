@@ -14,12 +14,35 @@ import sys
 
 
 from config import NUMBER_CORES, RESULTS_FOLDER, SNIPER_CONFIG, SCRIPTS, ENABLE_HEARTBEATS
-from resultlib.plot import create_plots
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNIPER_BASE = os.path.dirname(HERE)
 BENCHMARKS = os.path.join(SNIPER_BASE, 'benchmarks')
 BATCH_START = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M')
+
+THREAD_REQUIREMENTS = {
+    'parsec-blackscholes': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'parsec-bodytrack': [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'parsec-canneal': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'parsec-dedup': [4, 7, 10, 13, 16],
+    'parsec-fluidanimate': [2, 3, 0, 5, 0, 0, 0, 9],
+    'parsec-streamcluster': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'parsec-swaptions': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'parsec-x264': [1, 3, 4, 5, 6, 7, 8, 9],
+    'splash2-barnes': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-cholesky': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-fft': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
+    'splash2-fmm': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-lu.cont': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-lu.ncont': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-ocean.cont': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
+    'splash2-ocean.ncont': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
+    'splash2-radiosity': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-radix': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
+    'splash2-raytrace': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-water.nsq': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    'splash2-water.sp': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
+}
 
 
 def change_base_configuration(base_configuration):
@@ -159,10 +182,15 @@ def save_output(base_configuration, benchmark, console_output, cpistack, started
         elif 'app_mapping.' in f:
             shutil.copy(os.path.join(BENCHMARKS, f), directory)
 
-    create_plots(run)
+    try:
+        from resultlib.plot import create_plots
+        create_plots(run)
+    except ImportError as e:
+        print('Skipping plots because plotting dependencies are unavailable: {}'.format(e))
 
 
-def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None, base_cfg_overrides=None):
+def run(base_configuration, benchmark, ignore_error=False, perforation_script: str = None,
+        base_cfg_overrides=None, number_cores=None):
     print('running {} with configuration {}'.format(benchmark, '+'.join(base_configuration)))
     started = datetime.datetime.now()
     change_base_configuration(base_configuration)
@@ -187,7 +215,7 @@ def run(base_configuration, benchmark, ignore_error=False, perforation_script: s
         perforation_script = 'magic_perforation_rate:' 
    
     args = '-n {number_cores} -c {config} --benchmarks={benchmark} --no-roi --sim-end=last -senergystats:{periodic} -speriodic-power:{periodic}{script}{perforation}{benchmark_options}' \
-        .format(number_cores=NUMBER_CORES,
+        .format(number_cores=number_cores or NUMBER_CORES,
                 config=SNIPER_CONFIG,
                 benchmark=benchmark,
                 periodic=periodicPower,
@@ -245,31 +273,7 @@ class Infeasible(Exception):
 
 
 def get_instance(benchmark, parallelism, input_set='small'):
-    threads = {
-        'parsec-blackscholes': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'parsec-bodytrack': [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'parsec-canneal': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'parsec-dedup': [4, 7, 10, 13, 16],
-        'parsec-fluidanimate': [2, 3, 0, 5, 0, 0, 0, 9],
-        'parsec-streamcluster': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'parsec-swaptions': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'parsec-x264': [1, 3, 4, 5, 6, 7, 8, 9],
-        'splash2-barnes': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-cholesky': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-fft': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
-        'splash2-fmm': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-lu.cont': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-lu.ncont': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-ocean.cont': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
-        'splash2-ocean.ncont': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
-        'splash2-radiosity': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-radix': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],
-        'splash2-raytrace': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-water.nsq': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        'splash2-water.sp': [1, 2, 0, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 16],  # other parallelism values run but are suboptimal -> don't allow in the first place
-    }
-    
-    ps = threads[benchmark]
+    ps = THREAD_REQUIREMENTS[benchmark]
     if parallelism <= 0 or parallelism not in ps:
         raise Infeasible()
     p = ps.index(parallelism) + 1
@@ -278,6 +282,253 @@ def get_instance(benchmark, parallelism, input_set='small'):
         input_set = 'sim' + input_set
 
     return '{}-{}-{}'.format(benchmark, input_set, p)
+
+
+def split_csv(value):
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+def unique(items):
+    values = []
+    seen = set()
+    for item in items:
+        if item not in seen:
+            values.append(item)
+            seen.add(item)
+    return values
+
+
+def parse_parallelisms(value):
+    if not value:
+        return []
+    parallelisms = []
+    for item in split_csv(value):
+        try:
+            parallelisms.append(int(item))
+        except ValueError:
+            raise ValueError('invalid parallelism "{}"'.format(item))
+    return parallelisms
+
+
+def is_benchmark_instance(spec):
+    fields = spec.split('-')
+    return len(fields) == 4 and fields[3].isdigit()
+
+
+def parse_benchmark_instance(instance):
+    fields = instance.split('-')
+    if len(fields) != 4:
+        raise ValueError('invalid benchmark instance "{}"'.format(instance))
+    return fields[0], fields[1], fields[2], fields[3]
+
+
+def get_instance_core_requirement(instance):
+    suite, program, input_set, parallelism = parse_benchmark_instance(instance)
+    benchmark = '{}-{}'.format(suite, program)
+    instance_parallelism = int(parallelism)
+    if benchmark not in THREAD_REQUIREMENTS:
+        raise ValueError('unknown benchmark "{}" in instance "{}"'.format(benchmark, instance))
+    requirements = THREAD_REQUIREMENTS[benchmark]
+    if instance_parallelism < 1 or instance_parallelism > len(requirements):
+        raise Infeasible()
+    core_requirement = requirements[instance_parallelism - 1]
+    if core_requirement <= 0:
+        raise Infeasible()
+    return core_requirement
+
+
+def build_benchmark_instance(spec, parallelism=None, input_set='small'):
+    if ':' in spec:
+        spec, spec_parallelism = spec.rsplit(':', 1)
+        if parallelism is not None:
+            raise ValueError('parallelism provided twice for "{}"'.format(spec))
+        try:
+            parallelism = int(spec_parallelism)
+        except ValueError:
+            raise ValueError('invalid parallelism "{}"'.format(spec_parallelism))
+
+    if is_benchmark_instance(spec):
+        if parallelism is not None:
+            raise ValueError('prebuilt benchmark instance "{}" cannot also use --parallelisms'.format(spec))
+        get_instance_core_requirement(spec)
+        return spec
+
+    if parallelism is None:
+        raise ValueError('missing parallelism for "{}"'.format(spec))
+    return get_instance(spec, parallelism, input_set=input_set)
+
+
+def build_workload(args):
+    if args.workload and args.benchmarks:
+        raise ValueError('use either --workload or --benchmarks, not both')
+
+    if args.workload:
+        specs = split_csv(args.workload)
+        default_parallelisms = parse_parallelisms(args.parallelisms)
+    elif args.benchmarks:
+        specs = split_csv(args.benchmarks)
+        default_parallelisms = parse_parallelisms(args.parallelisms)
+        if not default_parallelisms:
+            default_parallelisms = [args.parallelism]
+    else:
+        specs = [args.benchmark]
+        default_parallelisms = [args.parallelism]
+
+    if not specs:
+        raise ValueError('workload is empty')
+
+    if default_parallelisms:
+        if len(default_parallelisms) == 1 and len(specs) > 1:
+            default_parallelisms = default_parallelisms * len(specs)
+        elif len(default_parallelisms) != len(specs):
+            raise ValueError('--parallelisms must have one value or match the number of benchmarks')
+
+    instances = []
+    for i, spec in enumerate(specs):
+        parallelism = default_parallelisms[i] if default_parallelisms else None
+        instances.append(build_benchmark_instance(spec, parallelism, input_set=args.input_set))
+
+    total_cores = sum(get_instance_core_requirement(instance) for instance in instances)
+    return ','.join(instances), instances, total_cores
+
+
+def workload_benchmarks(instances):
+    benchmarks = []
+    seen = set()
+    for instance in instances:
+        suite, program, input_set, parallelism = parse_benchmark_instance(instance)
+        if program in seen:
+            continue
+        benchmarks.append({
+            'suite': suite,
+            'program': program,
+            'suite_program': '{}-{}'.format(suite, program),
+            'instance': instance,
+        })
+        seen.add(program)
+    return benchmarks
+
+
+def normalize_workload_model_key(key):
+    return re.sub(r'[\s,_]+', '+', key.strip().lower())
+
+
+def parse_thermal_model_files(value):
+    mapping = {}
+    if not value:
+        return mapping
+    for item in split_csv(value):
+        if '=' not in item:
+            raise ValueError('invalid --thermal-model-files entry "{}"; expected benchmark=path'.format(item))
+        key, path = item.split('=', 1)
+        key = normalize_workload_model_key(key)
+        path = path.strip()
+        if not key or not path:
+            raise ValueError('invalid --thermal-model-files entry "{}"; expected benchmark=path'.format(item))
+        mapping[key] = path
+    return mapping
+
+
+def find_thermal_model_mapping(mapping, benchmark):
+    for key in (
+        benchmark['instance'],
+        benchmark['suite_program'],
+        benchmark['program'],
+    ):
+        normalized = normalize_workload_model_key(key)
+        if normalized in mapping:
+            return mapping[normalized]
+    return None
+
+
+def thermal_model_epoch_label(args):
+    if args.thermal_model_suffix:
+        return args.thermal_model_suffix
+
+    epoch_ns = args.dvfs_epoch_ns
+    if epoch_ns is None:
+        if args.dvfs_speed == 'fastDVFS':
+            epoch_ns = 100000
+        elif args.dvfs_speed == 'mediumDVFS':
+            epoch_ns = 250000
+        else:
+            epoch_ns = 1000000
+
+    epoch_ms = epoch_ns / 1000000.0
+    if epoch_ms.is_integer():
+        return '{}ms'.format(int(epoch_ms))
+    return '{}ms'.format(('{:.6g}'.format(epoch_ms)).replace('.', 'p'))
+
+
+def path_exists_from_simulationcontrol(path):
+    if os.path.isabs(path):
+        return os.path.exists(path)
+    return os.path.exists(os.path.normpath(os.path.join(HERE, path)))
+
+
+def infer_thermal_model_file(instances, args):
+    suffix = thermal_model_epoch_label(args)
+    benchmarks = workload_benchmarks(instances)
+    resolved = []
+    candidates = []
+
+    for benchmark in benchmarks:
+        candidate = os.path.join('..', 'ml_models', '{}_{}.txt'.format(benchmark['program'], suffix))
+        candidates.append(candidate)
+        if not path_exists_from_simulationcontrol(candidate):
+            return None, candidates
+        resolved.append('{}={}'.format(benchmark['program'], candidate))
+
+    if len(resolved) == 1:
+        return resolved[0].split('=', 1)[1], candidates
+    return ','.join(resolved), candidates
+
+
+def resolve_thermal_model_file(args, instances):
+    if args.thermal_model_file and args.thermal_model_files:
+        raise ValueError('use either --thermal-model-file or --thermal-model-files, not both')
+
+    if args.thermal_model_file:
+        return args.thermal_model_file
+
+    benchmarks = workload_benchmarks(instances)
+    if args.thermal_model_files:
+        mapping = parse_thermal_model_files(args.thermal_model_files)
+        resolved = []
+        missing = []
+        for benchmark in benchmarks:
+            path = find_thermal_model_mapping(mapping, benchmark)
+            if path:
+                resolved.append('{}={}'.format(benchmark['program'], path))
+            else:
+                missing.append(benchmark['program'])
+
+        if missing:
+            raise ValueError(
+                'missing thermal model mapping for benchmark(s): {}. '
+                'Use keys like blackscholes=../ml_models/blackscholes_1ms.txt.'.format(
+                    ', '.join(missing),
+                )
+            )
+
+        if len(resolved) == 1:
+            return resolved[0].split('=', 1)[1]
+        return ','.join(resolved)
+
+    inferred, candidates = infer_thermal_model_file(instances, args)
+    if inferred:
+        return inferred
+
+    if len(benchmarks) > 1:
+        raise ValueError(
+            'multi-program workload "{}" needs per-benchmark thermal model files. Tried: {}. '
+            'Pass --thermal-model-file or --thermal-model-files.'.format(
+                '+'.join(instances),
+                ', '.join(candidates),
+            )
+        )
+
+    return None
 
 
 def get_feasible_parallelisms(benchmark):
@@ -442,8 +693,6 @@ def dyn_thread_mapping_run(args):
 
     if args.profile_file:
         base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/profile_path'] = args.profile_file
-    if args.thermal_model_file:
-        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/thermal_model_path'] = args.thermal_model_file
     if args.prediction_temperature_bar is not None:
         base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/prediction_temperature_bar'] = args.prediction_temperature_bar
     if args.prediction_safety_margin is not None:
@@ -470,18 +719,38 @@ def dyn_thread_mapping_run(args):
         base_cfg_overrides['scheduler/open/thermal_sampler/migration_probability'] = args.thermal_sample_migration_probability
     if args.thermal_sample_random_seed is not None:
         base_cfg_overrides['scheduler/open/thermal_sampler/random_seed'] = args.thermal_sample_random_seed
+    if args.arrival_rate is not None:
+        base_cfg_overrides['scheduler/open/arrivalRate'] = args.arrival_rate
+    if args.arrival_interval_ns is not None:
+        base_cfg_overrides['scheduler/open/arrivalInterval'] = args.arrival_interval_ns
+    if args.arrival_distribution is not None:
+        base_cfg_overrides['scheduler/open/distribution'] = args.arrival_distribution
 
     base_configuration = [
         '{:.1f}GHz'.format(args.frequency),
         'DynThreadMapping',
         args.dvfs_speed,
     ]
-    benchmark = get_instance(args.benchmark, args.parallelism, input_set=args.input_set)
+    benchmark, workload_instances, workload_cores = build_workload(args)
+    thermal_model_file = resolve_thermal_model_file(args, workload_instances)
+    if thermal_model_file:
+        base_cfg_overrides['scheduler/open/dvfs/DynThreadMapping/thermal_model_path'] = thermal_model_file
+
+    number_cores = args.cores or NUMBER_CORES
+    if workload_cores > number_cores:
+        raise ValueError('workload requires {} cores, but --cores/config.py NUMBER_CORES is {}'.format(
+            workload_cores,
+            number_cores,
+        ))
+    if len(workload_instances) > 1 and args.arrival_rate is None:
+        base_cfg_overrides['scheduler/open/arrivalRate'] = len(workload_instances)
+
     run(
         base_configuration,
         benchmark,
         ignore_error=args.ignore_error,
         base_cfg_overrides=base_cfg_overrides,
+        number_cores=number_cores,
     )
 
 
@@ -493,6 +762,10 @@ def main():
                         help='Run the default DynThreadMapping experiment.')
     parser.add_argument('--thermal-model-file', default=None,
                         help='C++ text model path for scheduler/open/dvfs/DynThreadMapping/thermal_model_path.')
+    parser.add_argument('--thermal-model-files', default=None,
+                        help='Comma-separated benchmark=path mappings for per-benchmark thermal models.')
+    parser.add_argument('--thermal-model-suffix', default=None,
+                        help='Suffix used for automatic thermal model lookup, e.g. 1ms or 0p1ms. Defaults from --dvfs-epoch-ns/--dvfs-speed.')
     parser.add_argument('--prediction-temperature-bar', type=float, default=None,
                         help='Upper bound for predicted candidate temperature before DynThreadMapping will lower frequency.')
     parser.add_argument('--prediction-safety-margin', type=float, default=None,
@@ -533,6 +806,20 @@ def main():
                         help='Disable DynThreadMapping migration so DVFS prediction runs every epoch.')
     parser.add_argument('--benchmark', default='parsec-blackscholes')
     parser.add_argument('--parallelism', type=int, default=3)
+    parser.add_argument('--benchmarks', default=None,
+                        help='Comma-separated benchmark names for a multi-program workload.')
+    parser.add_argument('--parallelisms', default=None,
+                        help='Comma-separated total core requirements matching --benchmarks. A single value is reused for all benchmarks; defaults to --parallelism.')
+    parser.add_argument('--workload', default=None,
+                        help='Comma-separated workload specs: benchmark:parallelism or prebuilt suite-benchmark-input-nthreads instances.')
+    parser.add_argument('--cores', type=int, default=None,
+                        help='Number of Sniper application cores. Defaults to simulationcontrol/config.py NUMBER_CORES.')
+    parser.add_argument('--arrival-rate', type=int, default=None,
+                        help='Override scheduler/open/arrivalRate. Multi-program workloads default to all tasks arriving together.')
+    parser.add_argument('--arrival-interval-ns', type=int, default=None,
+                        help='Override scheduler/open/arrivalInterval.')
+    parser.add_argument('--arrival-distribution', choices=('uniform', 'poisson', 'explicit'), default=None,
+                        help='Override scheduler/open/distribution.')
     parser.add_argument('--input-set', default='simsmall')
     parser.add_argument('--frequency', type=float, default=3.0)
     parser.add_argument('--dvfs-speed', default='slowDVFS')
@@ -546,7 +833,8 @@ def main():
         # multi_program()
         return
 
-    if (args.h1 or args.dyn_thread_mapping or args.thermal_model_file or args.profile_file
+    if (args.h1 or args.dyn_thread_mapping or args.thermal_model_file or args.thermal_model_files
+            or args.thermal_model_suffix or args.profile_file
             or args.prediction_temperature_bar is not None
             or args.prediction_safety_margin is not None
             or args.migration_utilization_delta_threshold is not None
@@ -561,7 +849,13 @@ def main():
             or args.thermal_sample_min_temp is not None
             or args.thermal_sample_max_temp is not None
             or args.thermal_sample_migration_probability is not None
-            or args.thermal_sample_random_seed is not None):
+            or args.thermal_sample_random_seed is not None
+            or args.workload
+            or args.benchmarks
+            or args.cores is not None
+            or args.arrival_rate is not None
+            or args.arrival_interval_ns is not None
+            or args.arrival_distribution is not None):
         dyn_thread_mapping_run(args)
         return
 

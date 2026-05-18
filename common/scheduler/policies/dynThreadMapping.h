@@ -1,6 +1,8 @@
 #ifndef __DYN_THREAD_MAPPING_H
 #define __DYN_THREAD_MAPPING_H
+#include <map>
 #include <random>
+#include <string>
 #include <vector>
 #include "dvfspolicy.h"
 #include "migrationpolicy.h"
@@ -32,8 +34,12 @@ DynThreadMapping(const PerformanceCounters *performanceCounters,
                 float sampleMigrationProbability,
                 unsigned int sampleRandomSeed);
 
+    virtual ~DynThreadMapping();
+
     virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies,const std::vector<bool> &activeCores);
     virtual std::vector<migration> migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores);
+    void setTaskNames(const std::vector<std::string> &taskNames_);
+    void setCurrentTaskIds(const std::vector<int> &taskIds);
     bool hasLastTemperaturePrediction() const { return hasLastPredictedTemperatures; }
     const std::vector<double> &getLastPredictedTemperatures() const { return lastPredictedTemperatures; }
     const std::vector<int> &getLastPredictedFrequenciesMhz() const { return lastPredictedFrequenciesMhz; }
@@ -77,6 +83,9 @@ private:
     std::vector<float> core_states;
     NeighborPrediction pred;
     MLTemperaturePredictor thermal_model;
+    std::map<std::string, MLTemperaturePredictor> thermal_models;
+    std::vector<std::string> taskNames;
+    std::vector<int> currentTaskIds;
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
     float predictionTemperatureBar;
@@ -105,6 +114,10 @@ private:
     bool checkConstraints(const std::vector<NeighborPrediction::PredictionMap>& predictions, const std::vector<int>& newFrequencies, const std::vector<bool> &activeCores);
     float effectivePredictionTemperatureBar() const;
     double getMeasuredIPSBillions(unsigned int coreId);
+    bool hasLoadedThermalModel() const;
+    const MLTemperaturePredictor &getThermalModelForTaskId(int taskId) const;
+    const MLTemperaturePredictor &getThermalModelForCore(unsigned int coreId) const;
+    void loadThermalModels(const std::string &thermal_model_path, bool thermal_model_debug);
 
     double calc_temperature(double current_temp_c, double equilibrium_temp_c, double interval_ms, double tau_ms);
     void logUtilizations(const std::vector<int> &coreIds);

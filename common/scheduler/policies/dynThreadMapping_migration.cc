@@ -83,6 +83,7 @@ void DynThreadMapping::logUtilizations(const std::vector<int> &coreIds) {
 std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::vector<int> &taskIds, const std::vector<bool> &activeCores){
     std::vector<migration> migrations;
 
+    setCurrentTaskIds(taskIds);
     hasPendingCombinedFrequencies = false;
     pendingCombinedFrequencies.clear();
     clearLastTemperaturePrediction();
@@ -412,7 +413,7 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
         return migrations;
     }
 
-    if (thermal_model.isLoaded() && numCores > 0 && numCores <= 6 && !core_states.empty()) {
+    if (hasLoadedThermalModel() && numCores > 0 && numCores <= 6 && !core_states.empty()) {
         const double effectivePredictionBar = effectivePredictionTemperatureBar();
         std::vector<double> currentTemps(numCores, 0.0);
         std::vector<double> currentFreqs(numCores, 0.0);
@@ -685,7 +686,14 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
                 std::vector<double> predictedTemps(numCores, 0.0);
 
                 for (int core = 0; core < numCores; ++core) {
-                    double predTemp = thermal_model.predictNextTemp(
+                    int thermalTaskId = core < static_cast<int>(taskIds.size()) ? taskIds[core] : -1;
+                    if (core < static_cast<int>(workloadSourceAtCore.size()) &&
+                        workloadSourceAtCore[core] >= 0 &&
+                        workloadSourceAtCore[core] < static_cast<int>(taskIds.size())) {
+                        thermalTaskId = taskIds[workloadSourceAtCore[core]];
+                    }
+                    const MLTemperaturePredictor &thermalPredictor = getThermalModelForTaskId(thermalTaskId);
+                    double predTemp = thermalPredictor.predictNextTemp(
                         core,
                         currentTemps,
                         currentFreqs,

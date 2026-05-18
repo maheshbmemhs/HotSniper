@@ -1,11 +1,13 @@
 #include "dynThreadMapping.h"
 #include <cmath>
+#include <cctype>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <queue>
 #include <algorithm>
+#include <sstream>
 
 namespace {
 
@@ -32,6 +34,59 @@ double scaledForCandidateFrequency(double value, double source_freq_ghz, double 
     }
     const double ratio = std::min(4.0, std::max(0.0, target_freq_ghz / source_freq_ghz));
     return value * ratio;
+}
+
+std::string trim(const std::string &value)
+{
+    const std::string whitespace = " \t\n\r";
+    const size_t begin = value.find_first_not_of(whitespace);
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const size_t end = value.find_last_not_of(whitespace);
+    return value.substr(begin, end - begin + 1);
+}
+
+std::string normalizeThermalModelKey(const std::string &value)
+{
+    std::string key = trim(value);
+    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+    return key;
+}
+
+bool hasThermalModelMappingSyntax(const std::string &value)
+{
+    return value.find('=') != std::string::npos;
+}
+
+std::string benchmarkKeyFromTaskName(const std::string &taskName)
+{
+    const size_t firstDash = taskName.find('-');
+    if (firstDash == std::string::npos) {
+        return normalizeThermalModelKey(taskName);
+    }
+
+    const size_t secondDash = taskName.find('-', firstDash + 1);
+    if (secondDash == std::string::npos) {
+        return normalizeThermalModelKey(taskName.substr(firstDash + 1));
+    }
+
+    return normalizeThermalModelKey(taskName.substr(firstDash + 1, secondDash - firstDash - 1));
+}
+
+std::string suiteBenchmarkKeyFromTaskName(const std::string &taskName)
+{
+    const size_t firstDash = taskName.find('-');
+    if (firstDash == std::string::npos) {
+        return normalizeThermalModelKey(taskName);
+    }
+
+    const size_t secondDash = taskName.find('-', firstDash + 1);
+    if (secondDash == std::string::npos) {
+        return normalizeThermalModelKey(taskName);
+    }
+
+    return normalizeThermalModelKey(taskName.substr(0, secondDash));
 }
 
 }
@@ -62,7 +117,7 @@ coreRows(coreRows),
 coreColumns(coreColumns),
 core_states(core_states_),
 pred(profile_path),
-thermal_model(thermal_model_path, thermal_model_debug),
+thermal_model(),
 dtmCriticalTemperature(dtmCriticalTemperature),
 dtmRecoveredTemperature(dtmRecoveredTemperature),
 predictionTemperatureBar(predictionTemperatureBar_),
@@ -77,6 +132,7 @@ sampleMigrationProbability(std::min(1.0f, std::max(0.0f, sampleMigrationProbabil
 sampleRandomGenerator(sampleRandomSeed_),
 tolerance(tolerance_),
 dvfsInterval(dvfs_interval) {
+    loadThermalModels(thermal_model_path, thermal_model_debug);
     std::string s_core_states = "[";
     for(float f:core_states){
         s_core_states+=std::to_string(f)+", ";
@@ -99,6 +155,110 @@ dvfsInterval(dvfs_interval) {
     << "\n states: " << s_core_states << "]"
 	    << std::endl;
 	}
+
+DynThreadMapping::~DynThreadMapping()
+{
+}
+
+void DynThreadMapping::setTaskNames(const std::vector<std::string> &taskNames_)
+{
+    taskNames = taskNames_;
+}
+
+void DynThreadMapping::setCurrentTaskIds(const std::vector<int> &taskIds)
+{
+    currentTaskIds = taskIds;
+}
+
+void DynThreadMapping::loadThermalModels(const std::string &thermal_model_path, bool thermal_model_debug)
+{
+    thermal_models.clear();
+    thermal_model = MLTemperaturePredictor();
+
+    const std::string configuredPath = trim(thermal_model_path);
+    if (configuredPath.empty()) {
+        return;
+    }
+
+    if (!hasThermalModelMappingSyntax(configuredPath)) {
+        thermal_model = MLTemperaturePredictor(configuredPath, thermal_model_debug);
+        return;
+    }
+
+    std::stringstream entries(configuredPath);
+    std::string entry;
+    while (std::getline(entries, entry, ',')) {
+        entry = trim(entry);
+        if (entry.empty()) {
+            continue;
+        }
+
+        const size_t separator = entry.find('=');
+        if (separator == std::string::npos) {
+            std::cerr << "[Scheduler][DynThreadMapping]: ignoring malformed thermal model mapping entry: "
+                      << entry << std::endl;
+            continue;
+        }
+
+        const std::string key = normalizeThermalModelKey(entry.substr(0, separator));
+        const std::string path = trim(entry.substr(separator + 1));
+        if (key.empty() || path.empty()) {
+            std::cerr << "[Scheduler][DynThreadMapping]: ignoring malformed thermal model mapping entry: "
+                      << entry << std::endl;
+            continue;
+        }
+
+        thermal_models[key] = MLTemperaturePredictor(path, thermal_model_debug);
+        std::cout << "[Scheduler][DynThreadMapping]: thermal model mapping "
+                  << key << " -> " << path << std::endl;
+    }
+}
+
+bool DynThreadMapping::hasLoadedThermalModel() const
+{
+    if (thermal_model.isLoaded()) {
+        return true;
+    }
+
+    for (std::map<std::string, MLTemperaturePredictor>::const_iterator it = thermal_models.begin();
+         it != thermal_models.end();
+         ++it) {
+        if (it->second.isLoaded()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+const MLTemperaturePredictor &DynThreadMapping::getThermalModelForTaskId(int taskId) const
+{
+    if (taskId >= 0 && taskId < static_cast<int>(taskNames.size())) {
+        const std::string taskName = taskNames[taskId];
+        std::vector<std::string> keys;
+        keys.push_back(normalizeThermalModelKey(taskName));
+        keys.push_back(suiteBenchmarkKeyFromTaskName(taskName));
+        keys.push_back(benchmarkKeyFromTaskName(taskName));
+
+        for (size_t i = 0; i < keys.size(); ++i) {
+            std::map<std::string, MLTemperaturePredictor>::const_iterator it = thermal_models.find(keys[i]);
+            if (it != thermal_models.end()) {
+                return it->second;
+            }
+        }
+    }
+
+    return thermal_model;
+}
+
+const MLTemperaturePredictor &DynThreadMapping::getThermalModelForCore(unsigned int coreId) const
+{
+    if (coreId < currentTaskIds.size()) {
+        return getThermalModelForTaskId(currentTaskIds[coreId]);
+    }
+
+    return thermal_model;
+}
 
 void DynThreadMapping::clearLastTemperaturePrediction()
 {
@@ -199,7 +359,8 @@ float DynThreadMapping::effectivePredictionTemperatureBar() const
                     pm = pred.getNearestBenchmark(current_state,current_ips);
                 }
 
-                if(thermal_model.isLoaded()){
+                const MLTemperaturePredictor &thermalPredictor = getThermalModelForCore(i);
+                if(thermalPredictor.isLoaded()){
                     for(float state: core_states){
                         auto status = pm.find(state);
                         if(status == pm.end()){
@@ -218,7 +379,7 @@ float DynThreadMapping::effectivePredictionTemperatureBar() const
 	                        expectedCpis[i] = cpis[i];
 	                        expectedPowers[i] = scaledForCandidateFrequency(powers[i], currentFreqs[i], state);
 
-                        const double ml_temp = thermal_model.predictNextTemp(
+                        const double ml_temp = thermalPredictor.predictNextTemp(
                             i,
                             currentTemps,
                             currentFreqs,

@@ -119,6 +119,12 @@ MLTemperaturePredictor::Node::Node()
 {
 }
 
+MLTemperaturePredictor::MLTemperaturePredictor()
+    : loaded(false)
+    , debug_enabled(false)
+{
+}
+
 MLTemperaturePredictor::MLTemperaturePredictor(const std::string &model_path, bool debug_enabled_)
     : loaded(false)
     , debug_enabled(debug_enabled_)

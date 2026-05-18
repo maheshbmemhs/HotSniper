@@ -6,6 +6,7 @@
 
 class MLTemperaturePredictor {
 public:
+    MLTemperaturePredictor();
     explicit MLTemperaturePredictor(const std::string &model_path, bool debug_enabled = false);
 
     bool isLoaded() const;

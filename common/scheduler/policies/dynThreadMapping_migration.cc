@@ -222,9 +222,107 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
         return result;
     };
 
-    const bool allCoresActive =
-        activeCores.size() >= static_cast<size_t>(numCores) &&
-        std::count(activeCores.begin(), activeCores.begin() + numCores, true) == numCores;
+    // Convert a candidate placement of active workloads onto physical cores into
+    // the migration operations understood by SchedulerOpen.
+    auto buildMigrationsForWorkloadPlacement = [&](const std::vector<int> &workloadSourceAtCore) {
+        std::vector<migration> result;
+        std::vector<int> occupantAtCore(numCores, -1);
+        std::vector<int> positionOfSource(numCores, -1);
+        std::vector<bool> assignedAtCore(numCores, false);
+
+        for (int core = 0; core < numCores; ++core) {
+            assignedAtCore[core] =
+                core < static_cast<int>(taskIds.size()) && taskIds[core] != -1;
+            if (core < static_cast<int>(activeCores.size()) && activeCores[core]) {
+                occupantAtCore[core] = core;
+                positionOfSource[core] = core;
+                assignedAtCore[core] = true;
+            }
+        }
+
+        auto placementDone = [&]() {
+            for (int core = 0; core < numCores; ++core) {
+                if (occupantAtCore[core] != workloadSourceAtCore[core]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto appendMove = [&](int fromCore, int toCore) {
+            if (fromCore < 0 || toCore < 0 || fromCore == toCore) {
+                return;
+            }
+
+            const bool swap = occupantAtCore[toCore] != -1 || assignedAtCore[toCore];
+            result.emplace_back(migration{
+                static_cast<unsigned int>(fromCore),
+                static_cast<unsigned int>(toCore),
+                swap});
+
+            if (swap) {
+                std::swap(occupantAtCore[fromCore], occupantAtCore[toCore]);
+                if (occupantAtCore[fromCore] >= 0) {
+                    positionOfSource[occupantAtCore[fromCore]] = fromCore;
+                }
+                if (occupantAtCore[toCore] >= 0) {
+                    positionOfSource[occupantAtCore[toCore]] = toCore;
+                }
+                std::swap(assignedAtCore[fromCore], assignedAtCore[toCore]);
+            } else {
+                const int movedSource = occupantAtCore[fromCore];
+                occupantAtCore[toCore] = movedSource;
+                if (movedSource >= 0) {
+                    positionOfSource[movedSource] = toCore;
+                }
+                occupantAtCore[fromCore] = -1;
+                assignedAtCore[toCore] = assignedAtCore[fromCore];
+                assignedAtCore[fromCore] = false;
+            }
+        };
+
+        for (int guard = 0; !placementDone() && guard < numCores * numCores + numCores; ++guard) {
+            bool progress = false;
+
+            for (int targetCore = 0; targetCore < numCores; ++targetCore) {
+                const int sourceCore = workloadSourceAtCore[targetCore];
+                if (sourceCore < 0) {
+                    continue;
+                }
+
+                const int currentCore = positionOfSource[sourceCore];
+                if (currentCore != targetCore && occupantAtCore[targetCore] == -1) {
+                    appendMove(currentCore, targetCore);
+                    progress = true;
+                    break;
+                }
+            }
+
+            if (progress) {
+                continue;
+            }
+
+            for (int targetCore = 0; targetCore < numCores; ++targetCore) {
+                const int sourceCore = workloadSourceAtCore[targetCore];
+                if (sourceCore < 0) {
+                    continue;
+                }
+
+                const int currentCore = positionOfSource[sourceCore];
+                if (currentCore != targetCore) {
+                    appendMove(currentCore, targetCore);
+                    progress = true;
+                    break;
+                }
+            }
+
+            if (!progress) {
+                break;
+            }
+        }
+
+        return result;
+    };
 
     if (sampleExplorationEnabled && numCores > 0 && !core_states.empty()) {
         const double peakTemp = performanceCounters->getPeakTemperature();
@@ -314,12 +412,7 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
         return migrations;
     }
 
-    if (thermal_model.isLoaded() && activeCoreCount < numCores) {
-        migrationOccured = false;
-        return migrations;
-    }
-
-    if (thermal_model.isLoaded() && allCoresActive && numCores > 0 && numCores <= 6 && !core_states.empty()) {
+    if (thermal_model.isLoaded() && numCores > 0 && numCores <= 6 && !core_states.empty()) {
         const double effectivePredictionBar = effectivePredictionTemperatureBar();
         std::vector<double> currentTemps(numCores, 0.0);
         std::vector<double> currentFreqs(numCores, 0.0);
@@ -379,14 +472,14 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
         }
 
         size_t maxCandidateStateIdx = core_states.size() - 1;
-        if (measuredBusyCores < numCores) {
+        if (measuredBusyCores < activeCoreCount) {
             for (size_t idx = 0; idx < core_states.size(); ++idx) {
                 if (core_states[idx] <= 2.5f) {
                     maxCandidateStateIdx = idx;
                 }
             }
             std::cout << "[Scheduler][DynThreadMapping][Combined]: low-util startup guard busy_cores="
-                      << measuredBusyCores << "/" << numCores
+                      << measuredBusyCores << "/" << activeCoreCount
                       << " max_candidate_freq=" << core_states[maxCandidateStateIdx]
                       << "GHz" << std::endl;
         }
@@ -397,7 +490,7 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
             double totalIps;
             double maxPredTemp;
             int migrationCount;
-            std::vector<unsigned int> permutation;
+            std::vector<int> workloadSourceAtCore;
             std::vector<int> frequenciesMhz;
             std::vector<double> predictedTemps;
 
@@ -457,17 +550,50 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
         size_t candidatesEvaluated = 0;
         size_t safeCandidates = 0;
 
-        std::vector<unsigned int> permutation(numCores);
-        std::iota(permutation.begin(), permutation.end(), 0);
-        do {
+        std::vector<unsigned int> activeSourceCores;
+        for (int core = 0; core < numCores; ++core) {
+            if (core < static_cast<int>(activeCores.size()) && activeCores[core]) {
+                activeSourceCores.push_back(static_cast<unsigned int>(core));
+            }
+        }
+
+        std::vector<int> targetForSource(numCores, -1);
+        std::vector<bool> targetUsed(numCores, false);
+
+        std::function<void(size_t)> evaluatePlacement = [&](size_t sourceIndex) {
+            if (sourceIndex < activeSourceCores.size()) {
+                const unsigned int sourceCore = activeSourceCores[sourceIndex];
+                for (int targetCore = 0; targetCore < numCores; ++targetCore) {
+                    if (targetUsed[targetCore]) {
+                        continue;
+                    }
+
+                    targetUsed[targetCore] = true;
+                    targetForSource[sourceCore] = targetCore;
+                    evaluatePlacement(sourceIndex + 1);
+                    targetForSource[sourceCore] = -1;
+                    targetUsed[targetCore] = false;
+                }
+                return;
+            }
+
             ++mappingsEvaluated;
-            const int migrationCount = static_cast<int>(buildMigrationsForPermutation(permutation).size());
-            std::vector<size_t> frequencyIndices(numCores, 0);
+            std::vector<int> workloadSourceAtCore(numCores, -1);
+            for (unsigned int sourceCore : activeSourceCores) {
+                const int targetCore = targetForSource[sourceCore];
+                if (targetCore >= 0 && targetCore < numCores) {
+                    workloadSourceAtCore[targetCore] = static_cast<int>(sourceCore);
+                }
+            }
+
+            const int migrationCount =
+                static_cast<int>(buildMigrationsForWorkloadPlacement(workloadSourceAtCore).size());
+            std::vector<size_t> frequencyIndices(activeSourceCores.size(), 0);
 
             while (true) {
                 bool candidateAllowed = true;
-                for (int core = 0; core < numCores; ++core) {
-                    if (frequencyIndices[core] > maxCandidateStateIdx) {
+                for (size_t stateIndex : frequencyIndices) {
+                    if (stateIndex > maxCandidateStateIdx) {
                         candidateAllowed = false;
                         break;
                     }
@@ -481,51 +607,78 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
 
                 ++candidatesEvaluated;
 
-                std::vector<double> candidateFreqs(numCores, 0.0);
-                std::vector<int> candidateFrequenciesMhz(numCores, 0);
-	                std::vector<double> candidateIps(numCores, 0.0);
-	                std::vector<double> candidateUtilizations(numCores, 0.0);
-	                std::vector<double> candidateCpis(numCores, 0.0);
-	                std::vector<double> candidateRelNucaCpis(numCores, 0.0);
-	                std::vector<double> candidatePowers(numCores, 0.0);
-	                std::vector<double> thermalExpectedIps(numCores, 0.0);
-	                std::vector<double> thermalExpectedCpis(numCores, 0.0);
-	                std::vector<double> thermalExpectedPowers(numCores, 0.0);
-	                std::vector<double> thermalExpectedUtilizations(numCores, 0.0);
-	                std::vector<bool> candidateActiveCores(numCores, true);
+                std::vector<double> candidateFreqs(
+                    numCores, static_cast<double>(core_states.front()));
+                std::vector<int> candidateFrequenciesMhz(
+                    numCores, static_cast<int>(core_states.front() * 1000.0f));
+                std::vector<double> candidateIps(numCores, 0.0);
+                std::vector<double> candidateUtilizations(numCores, 0.0);
+                std::vector<double> candidateCpis(numCores, 0.0);
+                std::vector<double> candidateRelNucaCpis(numCores, 0.0);
+                std::vector<double> candidatePowers(numCores, 0.0);
+                std::vector<double> thermalExpectedIps(numCores, 0.0);
+                std::vector<double> thermalExpectedCpis(numCores, 0.0);
+                std::vector<double> thermalExpectedPowers(numCores, 0.0);
+                std::vector<double> thermalExpectedUtilizations(numCores, 0.0);
+                std::vector<bool> candidateActiveCores(numCores, false);
+
+                for (int core = 0; core < numCores; ++core) {
+                    const double idleFreq = candidateFreqs[core];
+                    candidateCpis[core] = cpis[core];
+                    candidateRelNucaCpis[core] = relNucaCpis[core];
+                    candidatePowers[core] = scaledForCandidateFrequency(
+                        powers[core],
+                        currentFreqs[core],
+                        idleFreq);
+                    thermalExpectedCpis[core] = cpis[core];
+                    thermalExpectedPowers[core] = candidatePowers[core];
+                }
 
                 double totalIps = 0.0;
-                for (int newCore = 0; newCore < numCores; ++newCore) {
-                    unsigned int oldCore = permutation[newCore];
-                    float state = core_states[frequencyIndices[newCore]];
+                for (size_t sourceIndex = 0; sourceIndex < activeSourceCores.size(); ++sourceIndex) {
+                    const unsigned int oldCore = activeSourceCores[sourceIndex];
+                    const int newCore = targetForSource[oldCore];
+                    if (newCore < 0 || newCore >= numCores) {
+                        continue;
+                    }
+
+                    float state = core_states[frequencyIndices[sourceIndex]];
                     candidateFreqs[newCore] = state;
                     candidateFrequenciesMhz[newCore] = static_cast<int>(state * 1000.0f);
+                    candidateActiveCores[newCore] = true;
 
                     const auto status = workloadPredictions[oldCore].find(state);
-	                    if (status != workloadPredictions[oldCore].end()) {
-	                        totalIps += status->second.ips;
-	                        candidateIps[newCore] = status->second.ips * 1e9;
-	                        candidateCpis[newCore] = status->second.cpi;
-	                        candidatePowers[newCore] = status->second.power;
+                    if (status != workloadPredictions[oldCore].end()) {
+                        totalIps += status->second.ips;
+                        candidateIps[newCore] = status->second.ips * 1e9;
+                        candidateCpis[newCore] = status->second.cpi;
+                        candidatePowers[newCore] = status->second.power;
                     } else {
-                        candidateIps[newCore] = measuredIps[oldCore];
+                        candidateIps[newCore] = scaledForCandidateFrequency(
+                            measuredIps[oldCore],
+                            currentFreqs[oldCore],
+                            state);
+                        totalIps += candidateIps[newCore] / 1e9;
                         candidateCpis[newCore] = cpis[oldCore];
-                        candidatePowers[newCore] = powers[oldCore];
-	                    }
+                        candidatePowers[newCore] = scaledForCandidateFrequency(
+                            powers[oldCore],
+                            currentFreqs[oldCore],
+                            state);
+                    }
 
-	                    candidateUtilizations[newCore] = utilizations[oldCore];
-	                    candidateRelNucaCpis[newCore] = relNucaCpis[oldCore];
-	                    thermalExpectedIps[newCore] = scaledForCandidateFrequency(
-	                        measuredIps[oldCore],
-	                        currentFreqs[oldCore],
-	                        state);
-	                    thermalExpectedCpis[newCore] = cpis[oldCore];
-	                    thermalExpectedPowers[newCore] = scaledForCandidateFrequency(
-	                        powers[oldCore],
-	                        currentFreqs[oldCore],
-	                        state);
-	                    thermalExpectedUtilizations[newCore] = utilizations[oldCore];
-	                }
+                    candidateUtilizations[newCore] = utilizations[oldCore];
+                    candidateRelNucaCpis[newCore] = relNucaCpis[oldCore];
+                    thermalExpectedIps[newCore] = scaledForCandidateFrequency(
+                        measuredIps[oldCore],
+                        currentFreqs[oldCore],
+                        state);
+                    thermalExpectedCpis[newCore] = cpis[oldCore];
+                    thermalExpectedPowers[newCore] = scaledForCandidateFrequency(
+                        powers[oldCore],
+                        currentFreqs[oldCore],
+                        state);
+                    thermalExpectedUtilizations[newCore] = utilizations[oldCore];
+                }
 
                 bool safe = true;
                 double maxPredTemp = -std::numeric_limits<double>::infinity();
@@ -542,13 +695,13 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
                         cpis,
                         candidateRelNucaCpis,
                         powers,
-                        candidateActiveCores,
-	                        false,
-	                        &thermalExpectedIps,
-	                        &thermalExpectedCpis,
-	                        &thermalExpectedPowers,
-	                        &thermalExpectedUtilizations,
-	                        &candidateActiveCores);
+                        activeCores,
+                        false,
+                        &thermalExpectedIps,
+                        &thermalExpectedCpis,
+                        &thermalExpectedPowers,
+                        &thermalExpectedUtilizations,
+                        &candidateActiveCores);
 
                     if (!std::isfinite(predTemp)) {
                         predTemp = std::numeric_limits<double>::infinity();
@@ -570,7 +723,7 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
                     best.totalIps = totalIps;
                     best.maxPredTemp = maxPredTemp;
                     best.migrationCount = migrationCount;
-                    best.permutation = permutation;
+                    best.workloadSourceAtCore = workloadSourceAtCore;
                     best.frequenciesMhz = candidateFrequenciesMhz;
                     best.predictedTemps = predictedTemps;
                 }
@@ -579,18 +732,21 @@ std::vector<migration> DynThreadMapping::migrate(SubsecondTime time, const std::
                     break;
                 }
             }
-        } while (std::next_permutation(permutation.begin(), permutation.end()));
+        };
+
+        evaluatePlacement(0);
 
         if (best.initialized) {
             pendingCombinedFrequencies = best.frequenciesMhz;
             hasPendingCombinedFrequencies = true;
-            migrations = buildMigrationsForPermutation(best.permutation);
+            migrations = buildMigrationsForWorkloadPlacement(best.workloadSourceAtCore);
             migrationOccured = !migrations.empty();
             setLastTemperaturePrediction(best.predictedTemps, best.frequenciesMhz);
 
             std::cout << "[Scheduler][DynThreadMapping][Combined]: evaluated "
                       << mappingsEvaluated << " mappings and " << candidatesEvaluated
                       << " combined candidates; safe candidates=" << safeCandidates
+                      << " active_workloads=" << activeSourceCores.size() << "/" << numCores
                       << " effective_temp_bar=" << effectivePredictionBar << "C" << std::endl;
             std::cout << "[Scheduler][DynThreadMapping][Combined]: selected "
                       << (best.safe ? "safe" : "fallback") << " candidate total_ips="

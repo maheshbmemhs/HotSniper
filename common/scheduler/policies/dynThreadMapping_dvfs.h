@@ -14,7 +14,8 @@ DynThreadMapping_dvfs(const PerformanceCounters *performanceCounters,
                 float target_ips,
                 std::vector<float> core_states,
                 float dtmCriticalTemperature, 
-                float dtmRecoveredTemperature);
+                float dtmRecoveredTemperature,
+                bool multiProgram);
 
     virtual std::vector<int> getFrequencies(const std::vector<int> &oldFrequencies,const std::vector<bool> &activeCores);
     
@@ -54,6 +55,7 @@ private:
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
     bool in_throttle_mode = false;
+    bool multiprogram = false;
     bool throttle();
 
     Move get_best_move(const std::vector<NeighborPrediction::PredictionMap>& predictions,const std::vector<int>& currentStatesIdx,const std::vector<bool> &activeCores);

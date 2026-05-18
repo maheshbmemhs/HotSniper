@@ -10,7 +10,8 @@ DynThreadMapping_dvfs::DynThreadMapping_dvfs(const PerformanceCounters *performa
                                    float target_ips_,
                                    std::vector<float> core_states_,
                                    float dtmCriticalTemperature, 
-                                   float dtmRecoveredTemperature): 
+                                   float dtmRecoveredTemperature,
+                                   bool multiprogram): 
 performanceCounters(performanceCounters),
 coreRows(coreRows),
 coreColumns(coreColumns),
@@ -18,7 +19,8 @@ core_states(core_states_),
 target_ips(target_ips_),
 pred(profile_path),
 dtmCriticalTemperature(dtmCriticalTemperature),
-dtmRecoveredTemperature(dtmRecoveredTemperature) {
+dtmRecoveredTemperature(dtmRecoveredTemperature),
+multiprogram(multiprogram) {
     std::string s_core_states = "[";
     for(float f:core_states){
         s_core_states+=std::to_string(f)+", ";
@@ -83,7 +85,9 @@ std::vector<int> DynThreadMapping_dvfs::getFrequencies(const std::vector<int> &o
         }
         std::cout << "[Scheduler][DynThreadMapping_dvfs]: Final States "<< std::endl;
         currentStatesIdx[0] = 2; // Fix core 0 for main thread
-        //currentStatesIdx[2] = 2; // Fix core 2 for main thread
+        if(multiprogram){
+            currentStatesIdx[2] = 2; // Fix core 2 for main thread
+        }
 
         // Update core frequency
         for(int i=0;i<(coreRows * coreColumns);i++){
@@ -101,9 +105,9 @@ DynThreadMapping_dvfs::Move DynThreadMapping_dvfs::get_best_move(const std::vect
     Move best_move;
     float best_score = 0.0;
     for(int i = 1;i<currentStatesIdx.size(); i++){
-        //if(i==2){
-            //continue;
-        //}
+        if(multiprogram && i==2){
+            continue;
+        }
         if(activeCores.at(i)){
             // Cant go any higher than this state
             if(currentStatesIdx[i]+1 >= core_states.size()){
@@ -162,9 +166,9 @@ bool DynThreadMapping_dvfs::checkConstraints(const std::vector<NeighborPredictio
                                              const std::vector<bool>& activeCores){
     float total_ips = 0.0f;
     for (unsigned int coreCounter = 1; coreCounter < coreRows * coreColumns; coreCounter++) {
-        //if(coreCounter==2){
-        //    continue;
-        //}
+        if(multiprogram && coreCounter==2){
+            continue;
+        }
         if(activeCores.at(coreCounter)){
             auto prediction = predictions[coreCounter];
             float new_clock_speed = core_states[currentStateIdx[coreCounter]];

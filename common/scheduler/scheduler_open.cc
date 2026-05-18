@@ -388,11 +388,12 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 		float target_ips = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping_dvfs/target_ips");
 		String profile_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping_dvfs/profile_path");
 		int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/DynThreadMapping_dvfs/num_states");
+		bool multiprogram = Sim()->getCfg()->getBool("scheduler/open/dvfs/DynThreadMapping_dvfs/multi_program");
 		vector<float> core_states;
 		for(int i =0;i<num_states;i++){
 			core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping_dvfs/core_states", i));
 		}
-		dvfsPolicy = new DynThreadMapping_dvfs(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),target_ips,core_states,criticalTemp,recovery);
+		dvfsPolicy = new DynThreadMapping_dvfs(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),target_ips,core_states,criticalTemp,recovery,multiprogram);
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);

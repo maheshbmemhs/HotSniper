@@ -262,13 +262,13 @@ def get_workload(benchmark, cores, parallelism=None, number_tasks=None, input_se
 
 def example():
     for benchmark in (
-                    #   'parsec-blackscholes',
+                      'parsec-blackscholes',
                       #'parsec-bodytrack',
                       #'parsec-canneal',
                       #'parsec-dedup',
                       #'parsec-ferret'
                       #'parsec-fluidanimate',
-                      'parsec-streamcluster',
+                      #'parsec-streamcluster',
                       #'parsec-swaptions',
                       #'parsec-x264',
                       #'splash2-barnes',
@@ -288,11 +288,11 @@ def example():
 
         min_parallelism = get_feasible_parallelisms(benchmark)[0]
         max_parallelism = get_feasible_parallelisms(benchmark)[-1]
-        for freq in (1,):
+        for freq in (4,):
             #for parallelism in (max_parallelism,):
             for parallelism in (3, ):
                 # you can also use try_run instead
-                run(['{:.1f}GHz'.format(freq), 'maxFreq', 'slowDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
+                run(['{:.1f}GHz'.format(freq), 'DynThreadMapping_dvfs', 'fastDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
 
 def example_pcgov():
     for benchmark in (
@@ -427,10 +427,10 @@ def multi_program():
     # tasks can be set to arrive at the same time.
 
     input_set = 'simsmall'
-    base_configuration = ['4.0GHz', "maxFreq"]
+    base_configuration = ['4.0GHz', 'DynThreadMapping_dvfs', 'fastDVFS','multiprogram']
     benchmark_set = (
         'parsec-blackscholes',
-        'parsec-x264',
+        'parsec-blackscholes',
     )
 
     if ENABLE_HEARTBEATS == True:
@@ -452,7 +452,7 @@ def test_static_power():
 
 
 def main():
-    # example()
+    example()
     # test_static_power()
     # multi_program()
 
@@ -462,7 +462,7 @@ def main():
     # ondemand_demo()
     # coldestcore_demo()
     # combined_demo()
-    fixedfreqmigration_demo()
+    #fixedfreqmigration_demo()
     # ondemand_multiprogram_demo()
     # coldestcore_multiprogram_demo()
     # mulitprog_fixedfreqmigration_demo()

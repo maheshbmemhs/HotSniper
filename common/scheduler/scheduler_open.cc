@@ -271,17 +271,17 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 		cout << "Pushing Task " << taskIterator << " to the waitingTaskQ" << endl;
 	}
 	
-	float criticalTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/cricital_temperature");
-	float recovery = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/recovered_temperature");
-	float tolerance = Sim()->getCfg()->getFloat("scheduler/open/dvfs/DynThreadMapping/tolerance");
-	String profile_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/profile_path");
-	String thermal_model_path = Sim()->getCfg()->getString("scheduler/open/dvfs/DynThreadMapping/thermal_model_path");
-	int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/DynThreadMapping/num_states");
+	float criticalTemp = Sim()->getCfg()->getFloat("scheduler/open/dvfs/GreedyMaxIPS/cricital_temperature");
+	float recovery = Sim()->getCfg()->getFloat("scheduler/open/dvfs/GreedyMaxIPS/recovered_temperature");
+	float tolerance = Sim()->getCfg()->getFloat("scheduler/open/dvfs/GreedyMaxIPS/tolerance");
+	String thermal_model_path = Sim()->getCfg()->getString("scheduler/open/dvfs/GreedyMaxIPS/thermal_model_path");
+	int num_states = Sim()->getCfg()->getInt("scheduler/open/dvfs/GreedyMaxIPS/num_states");
+	bool dvfs_when_migration = Sim()->getCfg()->getBool("scheduler/open/dvfs/GreedyMaxIPS/dvfs_when_migration");
 	vector<float> core_states;
 	for(int i =0;i<num_states;i++){
-		core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/DynThreadMapping/core_states", i));
+		core_states.push_back(Sim()->getCfg()->getFloatArray("scheduler/open/dvfs/GreedyMaxIPS/core_states", i));
 	}
-	dynThdMap = new DynThreadMapping(performanceCounters,coreRows,coreColumns,std::string(profile_path.c_str()),std::string(thermal_model_path.c_str()),tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery);
+	greedyMaxips = new GreedyMaxIPS(performanceCounters,coreRows,coreColumns,std::string(thermal_model_path.c_str()),dvfs_when_migration,tolerance,dvfsEpoch/1e-6,core_states,criticalTemp,recovery);
 
 	initMappingPolicy(Sim()->getCfg()->getString("scheduler/open/logic").c_str());
 	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
@@ -358,8 +358,8 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 		String thermalModelFilename = Sim()->getCfg()->getString("periodic_thermal/thermal_model");
 		thermalModel = new ThermalModel((unsigned int)coreRows, (unsigned int)coreColumns, thermalModelFilename, ambientTemperature, maxTemperature, inactivePower, tdp);
 		dvfsPolicy = new DVFSTSP(thermalModel, performanceCounters, coreRows, coreColumns, minFrequency, maxFrequency, frequencyStepSize);
-	} else if(policyName == "DynThreadMapping"){
-		dvfsPolicy = dynThdMap;
+	} else if(policyName == "GreedyMaxIPS"){
+		dvfsPolicy = greedyMaxips;
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);
@@ -373,8 +373,8 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 	cout << "[Scheduler] [Info]: Initializing migration policy" << endl;
 	if (policyName == "off") {
 		migrationPolicy = NULL;
-	} else if(policyName == "DynThreadMapping") {
-		migrationPolicy = dynThdMap;
+	} else if(policyName == "GreedyMaxIPS") {
+		migrationPolicy = greedyMaxips;
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
  		exit (1);

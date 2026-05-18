@@ -14,7 +14,7 @@
 #include "policies/dvfspolicy.h"
 #include "policies/mappingpolicy.h"
 #include "policies/migrationpolicy.h"
-#include "policies/dynThreadMapping.h"
+#include "policies/greedyMaxIPS.h"
 
 
 class SchedulerOpen : public SchedulerPinnedBase {
@@ -43,7 +43,7 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		bool isAssignedToTask(int coreId);
 		bool isAssignedToThread(int coreId);
 
-		DynThreadMapping* dynThdMap;
+		GreedyMaxIPS* greedyMaxips;
 
 		DVFSPolicy *dvfsPolicy = NULL;
 		long dvfsEpoch;

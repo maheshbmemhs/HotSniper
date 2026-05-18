@@ -7,13 +7,13 @@
 #include "neighbor_prediction.h"
 #include "ml_temperature_predictor.h"
 
-class DynThreadMapping : public DVFSPolicy, public MigrationPolicy {
+class GreedyMaxIPS : public DVFSPolicy, public MigrationPolicy {
 public:
-DynThreadMapping(const PerformanceCounters *performanceCounters, 
+GreedyMaxIPS(const PerformanceCounters *performanceCounters, 
                 int coreRows, 
                 int coreColumns, 
-                std::string profile_path,
                 std::string thermal_model_path,
+                bool dvfs_when_migration,
                 float tolerance,
                 float dvfs_interval,
                 std::vector<float> core_states,
@@ -55,7 +55,6 @@ private:
     unsigned int coreRows{0};
     unsigned int coreColumns{0};
     std::vector<float> core_states;
-    NeighborPrediction pred;
     float dtmCriticalTemperature;
     float dtmRecoveredTemperature;
     float tolerance {5.0f};
@@ -67,7 +66,7 @@ private:
     bool throttle();
 
     MLTemperaturePredictor thermal_model;
-
+    bool dvfs_when_migration = false;
     Move get_best_move(const std::vector<NeighborPrediction::PredictionMap>& predictions,const std::vector<int>& currentStatesIdx,const std::vector<bool> &activeCores);
     void get_max_freq(const std::vector<bool>& activeCores, std::vector<int>& currentStatesIdx);
     void exchange();
@@ -75,6 +74,6 @@ private:
     double getMeasuredIPSBillions(unsigned int coreId);
 
     double calc_temperature(double current_temp_c, double equilibrium_temp_c, double interval_ms, double tau_ms);
-    void logUtilizations(const std::vector<int> &coreIds);
+    void logTemps(const std::vector<int> &coreIds);
 };
 #endif

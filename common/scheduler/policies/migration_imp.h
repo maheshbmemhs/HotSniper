@@ -9,6 +9,8 @@
 #include <vector>
 #include "migrationpolicy.h"
 #include "performance_counters.h"
+#include "neighbor_prediction.h"
+#include "ml_temperature_predictor.h"
 
 class MigrationImp : public MigrationPolicy {
 public:
@@ -16,7 +18,9 @@ public:
         const PerformanceCounters *performanceCounters,
         int coreRows,
         int coreColumns,
-        float criticalTemperature);
+        float criticalTemperature,
+        std::string thermalModelPath,
+        bool thermalModelDebug);
 
     virtual std::vector<migration> migrate(
         SubsecondTime time,
@@ -28,6 +32,8 @@ private:
     unsigned int coreRows;
     unsigned int coreColumns;
     float criticalTemperature;
+    MLTemperaturePredictor thermal_model;
+    bool thermalModelDebug;
 
     // Helper methods
     float getMaxTemperature(const std::vector<bool> &activeCores) const;

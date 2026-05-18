@@ -5,21 +5,60 @@
 #include <vector>
 #include <unordered_map>
 #include <cmath>
+#include <functional>
 #include "simulator.h"
 #include "magic_server.h"  
 
 using namespace std;
 
+namespace {
+
+double readCounterValue(const std::function<double()> &reader, double fallback)
+{
+    try {
+        double value = reader();
+        if (std::isfinite(value) && value >= 0.0) {
+            return value;
+        }
+    } catch (...) {
+    }
+    return fallback;
+}
+
+double scaledForCandidateFrequency(double value, double source_freq_ghz, double target_freq_ghz)
+{
+    if (!std::isfinite(value) || value < 0.0) {
+        value = 0.0;
+    }
+    if (!std::isfinite(source_freq_ghz) || source_freq_ghz <= 0.0 ||
+        !std::isfinite(target_freq_ghz) || target_freq_ghz < 0.0) {
+        return value;
+    }
+    const double ratio = std::min(4.0, std::max(0.0, target_freq_ghz / source_freq_ghz));
+    return value * ratio;
+}
+
+}
+
 MigrationImp::MigrationImp(
     const PerformanceCounters *performanceCounters,
     int coreRows,
     int coreColumns,
-    float criticalTemperature)
+    float criticalTemperature,
+    std::string thermalModelPath,
+    bool thermalModelDebug)
     : performanceCounters(performanceCounters),
       coreRows(coreRows),
       coreColumns(coreColumns),
-      criticalTemperature(criticalTemperature) {
+      criticalTemperature(criticalTemperature),
+      thermal_model(thermalModelPath, thermalModelDebug),
+      thermalModelDebug(thermalModelDebug) {
     cout << "[MigrationImp] Initialized with critical temperature: " << criticalTemperature << "C" << endl;
+    if (thermal_model.isLoaded()) {
+        cout << "[MigrationImp] ML thermal model loaded from: " << thermalModelPath << endl;
+    } else {
+        cout << "[MigrationImp] ML thermal model not loaded, using NN predictions only" << endl;
+    }
 }
 
 std::vector<migration> MigrationImp::migrate(
@@ -58,12 +97,34 @@ std::vector<migration> MigrationImp::migrate(
     // Check if frequencies are initialized (DVFS must run before migration)
     bool frequenciesValid = true;
     for (int core : activeCoreList) {
-        int freqMHz = Sim()->getMagicServer()->getFrequency(core); //performanceCounters->getFreqOfCore(core);
+        int freqMHz = Sim()->getMagicServer()->getFrequency(core);
         if (freqMHz <= 0) {
             cout << "[MigrationImp] Frequencies not yet initialized (core " << core 
                 << " has freq=" << freqMHz << " MHz). Skipping migration." << endl;
             return migrations;
         }
+    }
+
+    // Step 3: Gather current performance counter data for all cores (needed for ML predictions)
+    const size_t numCoresSize = coreRows * coreColumns;
+    std::vector<double> currentTemps(numCoresSize, 0.0);
+    std::vector<double> currentFreqs(numCoresSize, 0.0);
+    std::vector<double> ips(numCoresSize, 0.0);
+    std::vector<double> utilizations(numCoresSize, 0.0);
+    std::vector<double> cpis(numCoresSize, 0.0);
+    std::vector<double> relNucaCpis(numCoresSize, 0.0);
+    std::vector<double> powers(numCoresSize, 0.0);
+
+    for (size_t core = 0; core < numCoresSize; core++) {
+        currentTemps[core] = readCounterValue([&] { return performanceCounters->getTemperatureOfCore(core); }, 0.0);
+        powers[core] = readCounterValue([&] { return performanceCounters->getPowerOfCore(core); }, 0.0);
+        utilizations[core] = readCounterValue([&] { return performanceCounters->getUtilizationOfCore(core); }, 0.0);
+        cpis[core] = readCounterValue([&] { return performanceCounters->getCPIOfCore(core); }, 0.0);
+        relNucaCpis[core] = readCounterValue([&] { return performanceCounters->getRelNUCACPIOfCore(core); }, 0.0);
+        ips[core] = readCounterValue([&] { return performanceCounters->getIPSOfCore(core); }, 0.0);
+
+        double freqMhz = Sim()->getMagicServer()->getFrequency(core);
+        currentFreqs[core] = freqMhz > 0.0 ? freqMhz / 1000.0 : 0.0;
     }
 
     // Initialize neighbor prediction
@@ -93,7 +154,8 @@ std::vector<migration> MigrationImp::migrate(
     // Sort threads by IPS (descending - highest IPS first)
     std::sort(threads.begin(), threads.end(),
               [](const ThreadInfo &a, const ThreadInfo &b) {
-                  return a.ips > b.ips;
+                //   return a.ips > b.ips;
+                return a.temperature > b.temperature;
               });
 
     cout << "[MigrationImp] Processing order (by IPS):" << endl;
@@ -139,6 +201,43 @@ std::vector<migration> MigrationImp::migrate(
         float currentThreadTemp = currentPred[currentFreqGHz].temp;
         float currentThreadIPS = currentPred[currentFreqGHz].ips;
 
+        // Enhance with ML prediction if available (keeps current state)
+        if (thermal_model.isLoaded()) {
+            std::vector<double> candidateFreqs = currentFreqs;  // Already at current freq
+            std::vector<double> expectedIps = ips;
+            std::vector<double> expectedCpis = cpis;
+            std::vector<double> expectedPowers = powers;
+            std::vector<double> expectedUtilizations = utilizations;
+
+            const double ml_temp = thermal_model.predictNextTemp(
+                currentCore,
+                currentTemps,
+                currentFreqs,
+                candidateFreqs,
+                ips,
+                utilizations,
+                cpis,
+                relNucaCpis,
+                powers,
+                activeCores,
+                true,
+                &expectedIps,
+                &expectedCpis,
+                &expectedPowers,
+                &expectedUtilizations,
+                &activeCores);
+
+            if (std::isfinite(ml_temp) && ml_temp > 0.0) {
+                currentThreadTemp = ml_temp;
+                static bool logged_ml_first = false;
+                if (!logged_ml_first) {
+                    cout << "[MigrationImp][ML] First ML prediction core=" << currentCore 
+                         << " freq=" << currentFreqGHz << " temp=" << ml_temp << "C" << endl;
+                    logged_ml_first = true;
+                }
+            }
+        }
+
         // Consider all other cores as potential targets
         for (int targetCore = 0; targetCore < numCores; targetCore++) {
             if (targetCore == currentCore) continue; // Skip current core
@@ -150,6 +249,42 @@ std::vector<migration> MigrationImp::migrate(
             auto targetPred = pred.getNearestBenchmark(targetFreqGHz, threadIPS);
             float newThreadTemp = targetPred[targetFreqGHz].temp;
             float newThreadIPS = targetPred[targetFreqGHz].ips;
+
+            // Enhance with ML prediction for thread on target core
+            if (thermal_model.isLoaded()) {
+                std::vector<double> candidateFreqs = currentFreqs;
+                candidateFreqs[targetCore] = targetFreqGHz;  // This core would run the thread
+                
+                std::vector<double> expectedIps = ips;
+                std::vector<double> expectedCpis = cpis;
+                std::vector<double> expectedPowers = powers;
+                std::vector<double> expectedUtilizations = utilizations;
+                
+                expectedIps[targetCore] = scaledForCandidateFrequency(ips[currentCore], currentFreqGHz, targetFreqGHz);
+                expectedPowers[targetCore] = scaledForCandidateFrequency(powers[currentCore], currentFreqGHz, targetFreqGHz);
+
+                const double ml_temp = thermal_model.predictNextTemp(
+                    targetCore,
+                    currentTemps,
+                    currentFreqs,
+                    candidateFreqs,
+                    ips,
+                    utilizations,
+                    cpis,
+                    relNucaCpis,
+                    powers,
+                    activeCores,
+                    true,
+                    &expectedIps,
+                    &expectedCpis,
+                    &expectedPowers,
+                    &expectedUtilizations,
+                    &activeCores);
+
+                if (std::isfinite(ml_temp) && ml_temp > 0.0) {
+                    newThreadTemp = ml_temp;
+                }
+            }
 
             float deltaTemp, deltaIPS;
 
@@ -163,18 +298,95 @@ std::vector<migration> MigrationImp::migrate(
                 float swapThreadNewTemp = swapPred[currentFreqGHz].temp;
                 float swapThreadNewIPS = swapPred[currentFreqGHz].ips;
                 
+                // Enhance swap thread prediction with ML (swap thread moving to currentCore)
+                if (thermal_model.isLoaded()) {
+                    std::vector<double> candidateFreqs = currentFreqs;
+                    candidateFreqs[currentCore] = currentFreqGHz;  // Swap thread would run here
+                    
+                    std::vector<double> expectedIps = ips;
+                    std::vector<double> expectedCpis = cpis;
+                    std::vector<double> expectedPowers = powers;
+                    std::vector<double> expectedUtilizations = utilizations;
+                    
+                    expectedIps[currentCore] = scaledForCandidateFrequency(ips[targetCore], targetFreqGHz, currentFreqGHz);
+                    expectedPowers[currentCore] = scaledForCandidateFrequency(powers[targetCore], targetFreqGHz, currentFreqGHz);
+
+                    const double ml_temp = thermal_model.predictNextTemp(
+                        currentCore,
+                        currentTemps,
+                        currentFreqs,
+                        candidateFreqs,
+                        ips,
+                        utilizations,
+                        cpis,
+                        relNucaCpis,
+                        powers,
+                        activeCores,
+                        true,
+                        &expectedIps,
+                        &expectedCpis,
+                        &expectedPowers,
+                        &expectedUtilizations,
+                        &activeCores);
+
+                    if (std::isfinite(ml_temp) && ml_temp > 0.0) {
+                        swapThreadNewTemp = ml_temp;
+                    }
+                }
+                
                 // Get current state of swap thread
                 auto swapCurrentPred = pred.getNearestBenchmark(targetFreqGHz, swapThreadIPS);
                 float swapThreadCurrentTemp = swapCurrentPred[targetFreqGHz].temp;
                 float swapThreadCurrentIPS = swapCurrentPred[targetFreqGHz].ips;
                 
+                // Enhance current swap thread temp with ML (already on targetCore)
+                if (thermal_model.isLoaded()) {
+                    std::vector<double> candidateFreqs = currentFreqs;  // No change, already there
+                    std::vector<double> expectedIps = ips;
+                    std::vector<double> expectedCpis = cpis;
+                    std::vector<double> expectedPowers = powers;
+                    std::vector<double> expectedUtilizations = utilizations;
+
+                    const double ml_temp = thermal_model.predictNextTemp(
+                        targetCore,
+                        currentTemps,
+                        currentFreqs,
+                        candidateFreqs,
+                        ips,
+                        utilizations,
+                        cpis,
+                        relNucaCpis,
+                        powers,
+                        activeCores,
+                        true,
+                        &expectedIps,
+                        &expectedCpis,
+                        &expectedPowers,
+                        &expectedUtilizations,
+                        &activeCores);
+
+                    if (std::isfinite(ml_temp) && ml_temp > 0.0) {
+                        swapThreadCurrentTemp = ml_temp;
+                    }
+                }
+                
                 // Total delta for both threads
                 deltaTemp = (currentThreadTemp + swapThreadCurrentTemp) - (newThreadTemp + swapThreadNewTemp);
                 deltaIPS = (currentThreadIPS + swapThreadCurrentIPS) - (newThreadIPS + swapThreadNewIPS);
+                
+                // Add thermal headroom bonus: prefer cooler cores
+                // Bonus for target core being cool, penalty for current core being cool (losing it)
+                float targetCoolnessBonus = (newThreadTemp - currentTemps[targetCore]) * 1.0f;
+                // float currentCorePenalty = (swapThreadNewTemp - currentTemps[currentCore]) * 0.3f;
+                deltaTemp += targetCoolnessBonus ;//- currentCorePenalty;
             } else {
                 // Simple move to empty core
                 deltaTemp = currentThreadTemp - newThreadTemp;
                 deltaIPS = currentThreadIPS - newThreadIPS;
+                
+                // Add thermal headroom bonus: prefer cores with thermal capacity
+                float coolnessBonus = (newThreadTemp - currentTemps[targetCore]) * 0.3f;
+                deltaTemp += coolnessBonus;
             }
 
             CoreOption opt;

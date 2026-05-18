@@ -415,7 +415,10 @@ void SchedulerOpen::initMigrationPolicy(String policyName) {
 		migrationPolicy = dynThdMap;
 	} else if(policyName == "migration_imp") {
 		float criticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/migration/migration_imp/critical_temperature");
-		migrationPolicy = new MigrationImp(performanceCounters, coreRows, coreColumns, criticalTemperature);
+		String thermalModelPath = Sim()->getCfg()->getString("scheduler/open/migration/migration_imp/thermal_model_path");
+		bool thermalModelDebug = Sim()->getCfg()->getBool("scheduler/open/migration/migration_imp/thermal_model_debug");
+		migrationPolicy = new MigrationImp(performanceCounters, coreRows, coreColumns, criticalTemperature, 
+		                                    std::string(thermalModelPath.c_str()), thermalModelDebug);
 	} else {
 		cout << "\n[Scheduler] [Error]: Unknown Migration Algorithm" << endl;
  		exit (1);

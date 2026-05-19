@@ -371,15 +371,41 @@ def multi_program():
 def test_static_power():
     run(['4.0GHz', 'testStaticPower', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
+def Greedy_GreedyMaxIPS():
+    run(['{:.1f}GHz'.format(4), 'GreedyMaxIPS','GreedyMaxIPS', 'fastDVFS'], get_instance('parsec-streamcluster', 3, input_set='simsmall'))
+
+def mulitprog_Greedy_GreedyMaxIPS():
+    input_set = 'simsmall'
+    base_configuration = ['{:.1f}GHz'.format(4), 'GreedyMaxIPS','GreedyMaxIPS' ,'fastDVFS']
+    benchmark_set = (
+        'parsec-blackscholes',
+        'parsec-streamcluster',
+    )
+
+    if ENABLE_HEARTBEATS == True:
+        base_configuration.append('hb_enabled')
+
+    benchmarks = ''
+    for i, benchmark in enumerate(benchmark_set):
+        min_parallelism = get_feasible_parallelisms(benchmark)[0]
+        if i != 0:
+            benchmarks = benchmarks + ',' + get_instance(benchmark, min_parallelism, input_set)
+        else:
+            benchmarks = benchmarks + get_instance(benchmark, min_parallelism, input_set)
+
+    run(base_configuration, benchmarks)
+
 
 def main():
-    example()
+    # example()
     # test_static_power()
     # multi_program()
 
     # example_symmetric_perforation()
     # example_asymmetric_perforation()
     # example_pcgov()
+    # Greedy_GreedyMaxIPS()
+    mulitprog_Greedy_GreedyMaxIPS()
     
 if __name__ == '__main__':
     main()

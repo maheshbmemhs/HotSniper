@@ -346,7 +346,7 @@ def example():
             #for parallelism in (max_parallelism,):
             for parallelism in (3, ):
                 # you can also use try_run instead
-                run(['{:.1f}GHz'.format(freq), 'maxFreq', 'slowDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
+                run(['{:.1f}GHz'.format(freq), 'maxFreq', 'fastDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
 
 def example_pcgov():
     for benchmark in (
@@ -535,7 +535,7 @@ def main():
     parser.add_argument('--parallelism', type=int, default=3)
     parser.add_argument('--input-set', default='simsmall')
     parser.add_argument('--frequency', type=float, default=3.0)
-    parser.add_argument('--dvfs-speed', default='slowDVFS')
+    parser.add_argument('--dvfs-speed', default='fastDVFS')
     parser.add_argument('--ignore-error', action='store_true')
 
     args = parser.parse_args()

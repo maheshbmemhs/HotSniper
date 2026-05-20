@@ -262,13 +262,13 @@ def get_workload(benchmark, cores, parallelism=None, number_tasks=None, input_se
 
 def example():
     for benchmark in (
-                      'parsec-blackscholes',
+                    #   'parsec-blackscholes',
                       #'parsec-bodytrack',
                       #'parsec-canneal',
                       #'parsec-dedup',
                       #'parsec-ferret'
                       #'parsec-fluidanimate',
-                      #'parsec-streamcluster',
+                      'parsec-streamcluster',
                       #'parsec-swaptions',
                       #'parsec-x264',
                       #'splash2-barnes',
@@ -288,11 +288,11 @@ def example():
 
         min_parallelism = get_feasible_parallelisms(benchmark)[0]
         max_parallelism = get_feasible_parallelisms(benchmark)[-1]
-        for freq in (4,):
+        for freq in (1,):
             #for parallelism in (max_parallelism,):
             for parallelism in (3, ):
                 # you can also use try_run instead
-                run(['{:.1f}GHz'.format(freq), 'DynThreadMapping_dvfs', 'fastDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
+                run(['{:.1f}GHz'.format(freq), 'maxFreq', 'slowDVFS'], get_instance(benchmark, parallelism, input_set='simsmall'))
 
 def example_pcgov():
     for benchmark in (
@@ -382,6 +382,30 @@ def mulitprog_fixedfreqmigration_demo():
 def fixedfreqmigration_demo():
     run(['{:.1f}GHz'.format(4), 'fixedFreq','migrationSota', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
+def DynThreadMapping_dvfs():
+    run(['{:.1f}GHz'.format(4), 'DynThreadMapping_dvfs', 'fastDVFS'], get_instance('parsec-streamcluster', 3, input_set='simsmall'))
+
+def mulitprog_DynThreadMapping_dvfs():
+    input_set = 'simsmall'
+    base_configuration = ['{:.1f}GHz'.format(4), 'DynThreadMapping_dvfs','fastDVFS',"multi_program"]
+    benchmark_set = (
+        'parsec-blackscholes',
+        'parsec-streamcluster',
+    )
+
+    if ENABLE_HEARTBEATS == True:
+        base_configuration.append('hb_enabled')
+
+    benchmarks = ''
+    for i, benchmark in enumerate(benchmark_set):
+        min_parallelism = get_feasible_parallelisms(benchmark)[0]
+        if i != 0:
+            benchmarks = benchmarks + ',' + get_instance(benchmark, min_parallelism, input_set)
+        else:
+            benchmarks = benchmarks + get_instance(benchmark, min_parallelism, input_set)
+
+    run(base_configuration, benchmarks)
+
 def example_symmetric_perforation():
     for benchmark in (
                       'parsec-blackscholes',
@@ -427,10 +451,10 @@ def multi_program():
     # tasks can be set to arrive at the same time.
 
     input_set = 'simsmall'
-    base_configuration = ['4.0GHz', 'DynThreadMapping_dvfs', 'fastDVFS','multiprogram']
+    base_configuration = ['4.0GHz', "maxFreq"]
     benchmark_set = (
         'parsec-blackscholes',
-        'parsec-blackscholes',
+        'parsec-x264',
     )
 
     if ENABLE_HEARTBEATS == True:
@@ -451,8 +475,10 @@ def test_static_power():
     run(['4.0GHz', 'testStaticPower', 'slowDVFS'], get_instance('parsec-blackscholes', 3, input_set='simsmall'))
 
 
+
+
 def main():
-    example()
+    # example()
     # test_static_power()
     # multi_program()
 
@@ -462,10 +488,13 @@ def main():
     # ondemand_demo()
     # coldestcore_demo()
     # combined_demo()
-    #fixedfreqmigration_demo()
+    # fixedfreqmigration_demo()
     # ondemand_multiprogram_demo()
     # coldestcore_multiprogram_demo()
     # mulitprog_fixedfreqmigration_demo()
+
+    # DynThreadMapping_dvfs()
+    mulitprog_DynThreadMapping_dvfs()
     
 if __name__ == '__main__':
     main()

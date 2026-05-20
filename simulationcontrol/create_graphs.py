@@ -45,7 +45,7 @@ df['config_with_governor'] = df['config'] + '-' + df['governor']
 
 # Create graphs for each metric
 for metric_col, metric_name in metrics.items():
-    fig, ax = plt.subplots(figsize=(14, 7))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     # Prepare data
     plot_data = df[['config', 'governor', metric_col]].copy()
@@ -55,7 +55,8 @@ for metric_col, metric_name in metrics.items():
     governors = plot_data['governor'].unique()
     
     x = range(len(configs))
-    width = 0.35
+    # Adjust width based on number of governors to prevent overlap
+    width = 0.8 / len(governors)
     
     for i, governor in enumerate(governors):
         gov_data = []
@@ -67,19 +68,24 @@ for metric_col, metric_name in metrics.items():
         bars = ax.bar([xi + offset for xi in x], gov_data, width, label=governor,
                       color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
         
-        # Add value labels on bars
+        # Add value labels on bars with smaller font and rotation
         for bar in bars:
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{height:.2f}',
-                   ha='center', va='bottom', fontsize=9)
+            if height > 0:  # Only show label if value is positive
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.1f}',
+                       ha='center', va='bottom', fontsize=7, rotation=0)
+    
+    # Add padding at the top for labels
+    y_max = ax.get_ylim()[1]
+    ax.set_ylim(top=y_max * 1.1)
     
     ax.set_xlabel('Configuration', fontsize=12, fontweight='bold')
     ax.set_ylabel(metric_name, fontsize=12, fontweight='bold')
     ax.set_title(f'{metric_name} Comparison', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(configs, rotation=45, ha='right')
-    ax.legend()
+    ax.set_xticklabels(configs, rotation=45, ha='right', fontsize=10)
+    ax.legend(fontsize=10, loc='upper left')
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
@@ -89,7 +95,7 @@ for metric_col, metric_name in metrics.items():
     plt.close()
 
 # Create a comprehensive comparison graph
-fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+fig, axes = plt.subplots(2, 3, figsize=(22, 14))
 axes = axes.flatten()
 
 for idx, (metric_col, metric_name) in enumerate(metrics.items()):
@@ -100,7 +106,8 @@ for idx, (metric_col, metric_name) in enumerate(metrics.items()):
     governors = plot_data['governor'].unique()
     
     x = range(len(configs))
-    width = 0.35
+    # Adjust width based on number of governors
+    width = 0.8 / len(governors)
     
     for i, governor in enumerate(governors):
         gov_data = []
@@ -112,27 +119,28 @@ for idx, (metric_col, metric_name) in enumerate(metrics.items()):
         ax.bar([xi + offset for xi in x], gov_data, width, label=governor,
                color=colorblind_colors[i], edgecolor='black', linewidth=0.7, hatch=hatches[i])
     
-    ax.set_xlabel('Configuration', fontsize=10, fontweight='bold')
-    ax.set_ylabel(metric_name, fontsize=10, fontweight='bold')
-    ax.set_title(metric_name, fontsize=11, fontweight='bold')
+    ax.set_xlabel('Configuration', fontsize=9, fontweight='bold')
+    ax.set_ylabel(metric_name, fontsize=9, fontweight='bold')
+    ax.set_title(metric_name, fontsize=10, fontweight='bold', pad=10)
     ax.set_xticks(x)
-    ax.set_xticklabels(configs, rotation=45, ha='right', fontsize=8)
-    ax.legend(fontsize=9)
+    ax.set_xticklabels(configs, rotation=45, ha='right', fontsize=7)
+    ax.legend(fontsize=7, loc='best')
     ax.grid(axis='y', alpha=0.3)
 
-plt.suptitle('Complete Performance Metrics Comparison', fontsize=16, fontweight='bold', y=1.00)
-plt.tight_layout()
+plt.suptitle('Complete Performance Metrics Comparison', fontsize=16, fontweight='bold', y=0.995)
+plt.tight_layout(rect=[0, 0, 1, 0.99])
 filename = f"{output_dir}/all_metrics_comparison.png"
 plt.savefig(filename, dpi=300, bbox_inches='tight')
 print(f"✓ Created {filename}")
 plt.close()
 
 # Create per-core comparison for temperature
-fig, ax = plt.subplots(figsize=(14, 7))
+fig, ax = plt.subplots(figsize=(18, 8))
 
 core_temp_cols = ['temp_C0', 'temp_C1', 'temp_C2', 'temp_C3']
 x = range(len(df))
-width = 0.15
+# Adjust width for 4 cores to prevent overlap
+width = 0.8 / len(core_temp_cols)
 
 for i, core_col in enumerate(core_temp_cols):
     offset = width * (i - len(core_temp_cols)/2 + 0.5)
@@ -143,8 +151,8 @@ ax.set_xlabel('Configuration', fontsize=12, fontweight='bold')
 ax.set_ylabel('Temperature (°C)', fontsize=12, fontweight='bold')
 ax.set_title('Per-Core Temperature Comparison', fontsize=14, fontweight='bold')
 ax.set_xticks(x)
-ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right')
-ax.legend()
+ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right', fontsize=9)
+ax.legend(fontsize=10, loc='upper left')
 ax.grid(axis='y', alpha=0.3)
 
 plt.tight_layout()
@@ -154,9 +162,12 @@ print(f"✓ Created {filename}")
 plt.close()
 
 # Create per-core comparison for power
-fig, ax = plt.subplots(figsize=(14, 7))
+fig, ax = plt.subplots(figsize=(18, 8))
 
 core_power_cols = ['power_C0_W', 'power_C1_W', 'power_C2_W', 'power_C3_W']
+x = range(len(df))
+# Adjust width for 4 cores to prevent overlap
+width = 0.8 / len(core_power_cols)
 
 for i, core_col in enumerate(core_power_cols):
     offset = width * (i - len(core_power_cols)/2 + 0.5)
@@ -167,8 +178,8 @@ ax.set_xlabel('Configuration', fontsize=12, fontweight='bold')
 ax.set_ylabel('Power (W)', fontsize=12, fontweight='bold')
 ax.set_title('Per-Core Power Comparison', fontsize=14, fontweight='bold')
 ax.set_xticks(x)
-ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right')
-ax.legend()
+ax.set_xticklabels(df['config_with_governor'], rotation=45, ha='right', fontsize=9)
+ax.legend(fontsize=10, loc='upper left')
 ax.grid(axis='y', alpha=0.3)
 
 plt.tight_layout()

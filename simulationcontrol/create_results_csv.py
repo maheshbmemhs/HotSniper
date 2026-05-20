@@ -9,14 +9,12 @@ def extract_info_from_path(path):
     """Extract governor, tasks, and benchmark type from result path"""
     basename = os.path.basename(path)
     
-    # Extract governor (migrationSota, coldestCore, onDemand, etc.)
+    # Extract governor from pattern: results_DATE_FREQ+GOVERNOR+...
+    # Pattern: results_YYYY-MM-DD_HH.MM_FREQ+GOVERNOR+...
     governor = None
-    if 'migrationSota' in basename:
-        governor = 'migrationSota'
-    elif 'coldestCore' in basename or 'ColdestCore' in basename:
-        governor = 'ColdestCore'
-    elif 'onDemand' in basename:
-        governor = 'onDemand'
+    match = re.search(r'\d+\.\d+GHz\+([^+]+)', basename)
+    if match:
+        governor = match.group(1)
     
     # Extract tasks (e.g., parsec-blackscholes-simsmall-2)
     # Look for pattern after the last underscore

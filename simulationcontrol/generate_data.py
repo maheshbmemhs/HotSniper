@@ -274,7 +274,7 @@ def create_ips_data_txts(runs,out_filename):
                     tracelen = len(trace)
                     sum=0
                     for i in trace:
-                        if i > 10000:
+                        if i > 1000:
                             sum+=i
                         else:
                             tracelen-=1

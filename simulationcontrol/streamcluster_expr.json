@@ -4,22 +4,8 @@
         "name":"streamcluster-migrationSota-3-core",
         "output_dir":"./txt_out/streamcluster/",
         "runs": [
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-04_12.35_4.0GHz+fixedFreq+slowDVFS+coldestCore_parsec-streamcluster-simsmall-2",
-            "name": "1"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_16.04_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-streamcluster-simsmall-2-good4.0",
-            "name": "2"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_05.14_4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-streamcluster-simsmall-1",
-            "name": "3"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_18.17_4.0GHz+migrationSota+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-streamcluster-simsmall-1",
-            "name": "4"
-        }
+        
+        
         ]
     }
    

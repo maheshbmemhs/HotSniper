@@ -1,27 +1,54 @@
 {
-"experiments": [
-    {
-        "name":"migrationSota-3-core",
-        "output_dir":"./txt_out/blackscholes/",
-        "runs": [
-               {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-04_12.28_4.0GHz+fixedFreq+slowDVFS+coldestCore_parsec-blackscholes-simsmall-2",
-            "name": "0"
-        },
-       
+    "experiments": [
         {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_10.26_4.0GHz+fixedFreq+migrationSota+slowDVFS_parsec-blackscholes-simsmall-2--good1",
-            "name": "1"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_04.59_4.0GHz+coldestCore+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
-            "name": "2"
-        },
-        {
-            "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-05_17.13_4.0GHz+migrationSota+fixedFreq+slowDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
-            "name": "3"
+            "name": "migrationSota-3-core",
+            "output_dir": "./txt_out/blackscholes/",
+            "runs": [
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-18_17.41_4.0GHz+GreedyMaxIPS+GreedyMaxIPS+fastDVFS_parsec-blackscholes-simsmall-2",
+                    "name": "0"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-18_17.55_4.0GHz+GreedyMaxIPS+GreedyMaxIPS+fastDVFS_parsec-streamcluster-simsmall-2-blackmodel",
+                    "name": "1"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-18_20.25_4.0GHz+GreedyMaxIPS+GreedyMaxIPS+fastDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1",
+                    "name": "2"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-18_20.56_4.0GHz+GreedyMaxIPS+GreedyMaxIPS+fastDVFS_parsec-streamcluster-simsmall-2",
+                    "name": "3"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-19_07.12_4.0GHz+GreedyMaxIPS+GreedyMaxIPS+fastDVFS+hb_enabled_parsec-blackscholes-simsmall-1,parsec-streamcluster-simsmall-1",
+                    "name": "4"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-19_17.52_3.5GHz+DynThreadMapping+fastDVFS_parsec-blackscholes-simsmall-1,parsec-blackscholes-simsmall-1-bruteforce",
+                    "name": "5"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-19_18.51_3.5GHz+DynThreadMapping+fastDVFS_parsec-blackscholes-simsmall-1,parsec-streamcluster-simsmall-1-bruteforce",
+                    "name": "6"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-19_21.10_3.5GHz+DynThreadMapping+fastDVFS_parsec-blackscholes-simsmall-2-bruteforce",
+                    "name": "7"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-19_21.27_3.5GHz+DynThreadMapping+fastDVFS_parsec-streamcluster-simsmall-2-bruteforce",
+                    "name": "8"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-20_00.45_4.0GHz+DynThreadMapping_dvfs+fastDVFS_parsec-blackscholes-simsmall-2-sota",
+                    "name": "9"
+                },
+                {
+                    "path": "/home/mahesh/Desktop/courses/EEEC/LAB/HotSniper/results/results_2026-05-20_08.03_4.0GHz+DynThreadMapping_dvfs+fastDVFS_parsec-streamcluster-simsmall-2",
+                    "name": "10"
+                }
+            ]
         }
-        ]
-    }]
-
+    ]
 }

@@ -25,7 +25,8 @@ metrics = {
     'total_energy_J': 'Total Energy (J)',
     'total_power_W': 'Total Power (W)',
     'avg_cpi': 'Average CPI',
-    'avg_ips_GIPS': 'Average IPS (GIPS)'
+    'avg_ips_GIPS': 'Average IPS (GIPS)',
+    'total_ips_GIPS': 'Total IPS (GIPS)'
 }
 
 # Create a shortened task label
@@ -95,7 +96,7 @@ for metric_col, metric_name in metrics.items():
     plt.close()
 
 # Create a comprehensive comparison graph
-fig, axes = plt.subplots(2, 3, figsize=(22, 14))
+fig, axes = plt.subplots(3, 3, figsize=(24, 18))
 axes = axes.flatten()
 
 for idx, (metric_col, metric_name) in enumerate(metrics.items()):
@@ -126,6 +127,10 @@ for idx, (metric_col, metric_name) in enumerate(metrics.items()):
     ax.set_xticklabels(configs, rotation=45, ha='right', fontsize=7)
     ax.legend(fontsize=7, loc='best')
     ax.grid(axis='y', alpha=0.3)
+
+# Hide unused subplots
+for idx in range(len(metrics), len(axes)):
+    axes[idx].set_visible(False)
 
 plt.suptitle('Complete Performance Metrics Comparison', fontsize=16, fontweight='bold', y=0.995)
 plt.tight_layout(rect=[0, 0, 1, 0.99])

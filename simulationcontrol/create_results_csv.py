@@ -109,15 +109,24 @@ def create_combined_csv(json_files, output_csv='experiment_results.csv'):
                             
                             elif metric_name == 'cpi':
                                 # Per-core CPI
+                                core_cpi_sum = 0
                                 for i in range(4):
-                                    row_data[f'cpi_C{i}'] = metric_data.get(f'C_{i}', 0)
-                                row_data['avg_cpi'] = metric_data.get('avg_workers', 0)
+                                    cpi_value = metric_data.get(f'C_{i}', 0)
+                                    row_data[f'cpi_C{i}'] = cpi_value
+                                    core_cpi_sum += cpi_value
+                                # Calculate average correctly by dividing by 4 (all cores)
+                                row_data['avg_cpi'] = core_cpi_sum / 4
                             
                             elif metric_name == 'ips':
                                 # Per-core IPS
+                                core_ips_sum = 0
                                 for i in range(4):
-                                    row_data[f'ips_C{i}_GIPS'] = metric_data.get(f'C_{i}', 0)
-                                row_data['avg_ips_GIPS'] = metric_data.get('avg_workers', 0)
+                                    ips_value = metric_data.get(f'C_{i}', 0)
+                                    row_data[f'ips_C{i}_GIPS'] = ips_value
+                                    core_ips_sum += ips_value
+                                # Calculate average correctly by dividing by 4 (all cores)
+                                row_data['avg_ips_GIPS'] = round(core_ips_sum / 4, 2)
+                                row_data['total_ips_GIPS'] = round(core_ips_sum, 2)
                 
                 all_rows.append(row_data)
                 run_id += 1
@@ -133,7 +142,7 @@ def create_combined_csv(json_files, output_csv='experiment_results.csv'):
     power_cols = [f'power_C{i}_W' for i in range(4)] + ['total_power_W']
     energy_cols = [f'energy_C{i}_J' for i in range(4)] + ['total_energy_J']
     cpi_cols = [f'cpi_C{i}' for i in range(4)] + ['avg_cpi']
-    ips_cols = [f'ips_C{i}_GIPS' for i in range(4)] + ['avg_ips_GIPS']
+    ips_cols = [f'ips_C{i}_GIPS' for i in range(4)] + ['avg_ips_GIPS', 'total_ips_GIPS']
     resp_cols = ['avg_response_time_ms']
     
     # Combine in logical order
